@@ -33,6 +33,11 @@ export default function App() {
   const [forceRefresh, setForceRefresh] = useState(false)
   const [generating, setGenerating] = useState(false)
 
+  // Profile overrides
+  const [profileName, setProfileName] = useState("")
+  const [profileUid, setProfileUid] = useState("")
+  const [profileBatch, setProfileBatch] = useState("")
+
   useEffect(() => {
     if (token) {
       fetchProfile()
@@ -53,6 +58,11 @@ export default function App() {
       setProfile(data)
       if (data.subject_code) setSubjectCode(data.subject_code)
       if (data.subject_name) setSubjectName(data.subject_name)
+      
+      // Load user defaults into editable state
+      if (data.student?.student_name) setProfileName(data.student.student_name)
+      if (data.student?.uid) setProfileUid(data.student.uid)
+      if (data.student?.section_group) setProfileBatch(data.student.section_group)
     } catch (err) {
       toast.error("Failed to fetch profile")
     }
@@ -136,6 +146,11 @@ export default function App() {
       formData.append("subject_code", subjectCode)
       formData.append("subject_name", subjectName)
       formData.append("force_refresh", String(forceRefresh))
+      
+      // Append profile overrides if provided
+      if (profileName) formData.append("student_name", profileName)
+      if (profileUid) formData.append("uid", profileUid)
+      if (profileBatch) formData.append("batch", profileBatch)
 
       const res = await fetch(`${API_BASE}/generate`, {
         method: "POST",
@@ -274,7 +289,11 @@ export default function App() {
             </div>
             <div className="flex items-center gap-4">
               <span className="hidden sm:inline-block text-sm font-medium text-muted-foreground bg-muted px-3 py-1.5 rounded-full">
-                {profile ? `${profile.generations_today || 0} / ${profile.generation_limit} used today` : 'Loading quota...'}
+                {profile 
+                  ? (profile.user?.role === 'admin' 
+                      ? 'Unlimited generations' 
+                      : `${Math.max(0, 3 - (profile.user?.remaining_generations || 0))} / 3 used today`) 
+                  : 'Loading quota...'}
               </span>
               <ModeToggle />
               <Button variant="ghost" size="icon" onClick={handleLogout} className="text-muted-foreground hover:text-foreground h-11 w-11 rounded-xl">
@@ -290,20 +309,22 @@ export default function App() {
             <Card className="border-border shadow-sm">
               <CardHeader>
                 <CardTitle className="text-xl">Profile Defaults</CardTitle>
-                <CardDescription>Your details embedded in reports.</CardDescription>
+                <CardDescription>
+                  These values will be embedded in generated reports. You can override them here.
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="flex justify-between items-center text-sm border-b border-border pb-3">
-                  <span className="text-muted-foreground font-medium">Name</span>
-                  <span className="font-semibold">{profile?.student_name || 'Not set'}</span>
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground font-medium">Name</Label>
+                  <Input value={profileName} onChange={e => setProfileName(e.target.value)} placeholder="e.g. John Doe" className="h-11 bg-muted/50" />
                 </div>
-                <div className="flex justify-between items-center text-sm border-b border-border pb-3">
-                  <span className="text-muted-foreground font-medium">UID</span>
-                  <span className="font-semibold">{profile?.uid || 'Not set'}</span>
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground font-medium">UID</Label>
+                  <Input value={profileUid} onChange={e => setProfileUid(e.target.value)} placeholder="e.g. 24BCS101" className="h-11 bg-muted/50" />
                 </div>
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-muted-foreground font-medium">Batch</span>
-                  <span className="font-semibold">{profile?.batch || 'Not set'}</span>
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground font-medium">Batch</Label>
+                  <Input value={profileBatch} onChange={e => setProfileBatch(e.target.value)} placeholder="e.g. 1" className="h-11 bg-muted/50" />
                 </div>
               </CardContent>
             </Card>
@@ -316,11 +337,39 @@ export default function App() {
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="subject-code">Subject Code</Label>
-                  <Input id="subject-code" value={subjectCode} onChange={e => setSubjectCode(e.target.value)} placeholder="e.g. 24CSH-301" className="h-11 bg-muted/50" />
+                  <Input 
+                    id="subject-code" 
+                    list="subject-codes"
+                    value={subjectCode} 
+                    onChange={e => {
+                      setSubjectCode(e.target.value)
+                      const subject = profile?.subjects?.find((s: any) => s.subject_code === e.target.value)
+                      if (subject) setSubjectName(subject.subject_name)
+                    }} 
+                    placeholder="e.g. 24CSH-301" 
+                    className="h-11 bg-muted/50" 
+                  />
+                  <datalist id="subject-codes">
+                    {profile?.subjects?.map((s: any) => (
+                      <option key={s.subject_code} value={s.subject_code} />
+                    ))}
+                  </datalist>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="subject-name">Subject Name</Label>
-                  <Input id="subject-name" value={subjectName} onChange={e => setSubjectName(e.target.value)} placeholder="e.g. PBLJ" className="h-11 bg-muted/50" />
+                  <Input 
+                    id="subject-name" 
+                    list="subject-names"
+                    value={subjectName} 
+                    onChange={e => setSubjectName(e.target.value)} 
+                    placeholder="e.g. PBLJ" 
+                    className="h-11 bg-muted/50" 
+                  />
+                  <datalist id="subject-names">
+                    {profile?.subjects?.map((s: any) => (
+                      <option key={s.subject_name} value={s.subject_name} />
+                    ))}
+                  </datalist>
                 </div>
               </CardContent>
             </Card>
