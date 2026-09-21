@@ -1,0 +1,21 @@
+# LabForge Agent Rules
+
+- Never fabricate program output.
+- Never fabricate screenshots.
+- Never claim generated code works until it has actually compiled and executed.
+- Never modify the original reference files.
+- Preserve university formatting.
+- The experiment source is authoritative.
+- Do not silently change Easy, Medium, or Hard requirements.
+- AI must produce structured data rather than directly controlling final DOCX layout.
+- Deterministic application code controls document generation.
+- Student metadata must come from a stored profile.
+- Keep AI, execution, document generation, validation, and storage separated.
+- Generated Java code must compile before appearing as a successful solution.
+- Generated code must be suitable for a university practical and viva.
+- Use temporary directories for code execution.
+- Do not execute generated code without appropriate isolation and resource limits.
+- Avoid unnecessary dependencies.
+- Inspect existing files before replacing or modifying them.
+- Run relevant tests after implementation changes.
+- Do not begin frontend or Telegram work until the core pipeline works.

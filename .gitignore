@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual environments and local configuration
+.venv/
+venv/
+env/
+ENV/
+.env
+.env.*
+!.env.example
+
+# Generated LabForge outputs
+artifacts/**
+tmp/
+temp/
+.tmp/
+execution_tmp/
+generated/
+
+# Java execution byproducts
+*.class
+*.jar
+*.war
+*.ear
+
+# Node / frontend byproducts
+node_modules/
+dist/
+build/
+coverage/
+apps/web/.next/
+apps/web/out/
+
+# IDE and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Packaging
+*.egg-info/
+wheelhouse/
+
+# Miscellaneous scratch files and outputs
+scratch/
+logs.db
+Test_report/
+test_out.docx
+HANDOFF_TO_CHATGPT.txt

@@ -1,0 +1,19 @@
+services:
+  gotenberg:
+    # Pin this to an immutable digest in production after visual QA.
+    image: ${GOTENBERG_IMAGE:-gotenberg/gotenberg:8}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      # Add the university-approved font files here; do not distribute fonts
+      # without an appropriate license.
+      - ./fonts:/usr/local/share/fonts/labforge:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 1g
+    cpus: 1.0

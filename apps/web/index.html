@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LabForge | University Report Generator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css?v=2">
+</head>
+<body>
+    <div class="background-blobs">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+    </div>
+
+    <main class="app-container">
+        <header class="app-header">
+            <div class="logo">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18"/></svg>
+                <h1>LabForge</h1>
+            </div>
+            <p class="subtitle">Automated Java Programming Lab Reports</p>
+        </header>
+
+        <section class="dashboard-panel glass-panel">
+            <div class="profile-section">
+                <h2>Current Profile</h2>
+                <div id="profile-info" class="info-grid">
+                    <div class="loading">Loading profile...</div>
+                </div>
+            </div>
+            
+            <div class="subject-section">
+                <h2>Subject Setup</h2>
+                <div class="select-wrapper">
+                    <select id="subject-select" disabled>
+                        <option value="">Loading subjects...</option>
+                    </select>
+                </div>
+            </div>
+        </section>
+
+        <section class="generate-panel glass-panel">
+            <h2>Generate Report</h2>
+            <p class="description">Upload your `source-notes.md` file or drag and drop it here.</p>
+            
+            <div class="upload-area" id="upload-area">
+                <input type="file" id="file-input" accept=".md,.txt" class="hidden-input">
+                <svg class="upload-icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+                <p id="file-name">Click to browse or drag & drop</p>
+            </div>
+
+            <div class="actions">
+                <label class="checkbox-wrapper">
+                    <input type="checkbox" id="force-refresh">
+                    <span class="checkmark"></span>
+                    Force refresh (ignore AI cache)
+                </label>
+                <button id="generate-btn" class="primary-btn" disabled>Generate Report</button>
+            </div>
+        </section>
+
+        <section id="results-panel" class="results-panel glass-panel hidden">
+            <h2>Generation Complete</h2>
+            <div class="status-summary" id="status-summary">
+                <!-- Status details injected by JS -->
+            </div>
+            
+            <div class="download-links">
+                <a href="#" id="download-docx" class="download-btn docx-btn" target="_blank" download>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                    Download DOCX
+                </a>
+                <a href="#" id="download-pdf" class="download-btn pdf-btn hidden" target="_blank" download>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                    Download PDF
+                </a>
+            </div>
+        </section>
+
+        <!-- Loading Overlay -->
+        <div id="loading-overlay" class="loading-overlay hidden">
+            <div class="spinner"></div>
+            <h3 id="loading-text">Generating Report...</h3>
+            <p>This may take up to a minute depending on AI response and Java compilation.</p>
+        </div>
+        
+        <!-- Toast Notification -->
+        <div id="toast" class="toast hidden"></div>
+    </main>
+
+    <script src="app.js?v=2"></script>
+</body>
+</html>
