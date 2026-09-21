@@ -1,0 +1,10 @@
+{
+    "admin": {
+        "password_hash": "$2b$12$YbGfqFUvFLsZ/Lh2FvXf0el/9IWzu.bKShRQO3mjeuvGKFgS28wFa",
+        "role": "admin"
+    },
+    "user1": {
+        "password_hash": "$2b$12$KGLhfZHa5DGV0iTPFkxdOe3sxXCQ4pDlZ2hpVfHBm7neGIswinfAq",
+        "role": "user"
+    }
+}

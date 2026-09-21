@@ -15,13 +15,57 @@
         <div class="blob blob-2"></div>
     </div>
 
-    <main class="app-container">
-        <header class="app-header">
-            <div class="logo">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18"/></svg>
+    <!-- Landing & Auth Page -->
+    <main id="landing-container" class="landing-container hidden">
+        <div class="landing-content">
+            <div class="logo landing-logo">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18"/></svg>
                 <h1>LabForge</h1>
             </div>
-            <p class="subtitle">Automated Java Programming Lab Reports</p>
+            <p class="subtitle">The intelligent report generation platform for modern university labs.</p>
+            
+            <div class="auth-box glass-panel">
+                <div class="auth-tabs">
+                    <button class="auth-tab active" id="tab-login">Log In</button>
+                    <button class="auth-tab" id="tab-signup">Sign Up</button>
+                </div>
+
+                <!-- Login Form -->
+                <div id="form-login" class="auth-form">
+                    <input type="text" id="login-username" class="profile-input" placeholder="Username">
+                    <input type="password" id="login-password" class="profile-input" placeholder="Password">
+                    <button id="login-btn" class="primary-btn full-width">Log In to LabForge</button>
+                </div>
+
+                <!-- Signup Form -->
+                <div id="form-signup" class="auth-form hidden">
+                    <input type="text" id="signup-username" class="profile-input" placeholder="Choose a Username">
+                    <input type="password" id="signup-password" class="profile-input" placeholder="Choose a Password">
+                    
+                    <div class="divider"><span>Profile Defaults</span></div>
+                    <p class="tiny-note">This will be the default information for the generated reports, but you can change it later.</p>
+                    
+                    <input type="text" id="signup-name" class="profile-input" placeholder="Full Name (e.g. John Doe)">
+                    <input type="text" id="signup-uid" class="profile-input" placeholder="Roll Number / UID">
+                    <input type="text" id="signup-batch" class="profile-input" placeholder="Batch / Section">
+                    
+                    <button id="signup-btn" class="primary-btn full-width">Create Account</button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Main Dashboard -->
+    <main id="app-container" class="app-container hidden">
+        <header class="app-header" style="display: flex; justify-content: space-between; align-items: flex-start; text-align: left;">
+            <div>
+                <div class="logo">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18"/></svg>
+                    <h1>LabForge</h1>
+                </div>
+                <p class="subtitle">Automated Java Programming Lab Reports</p>
+            </div>
+            <button id="logout-btn" class="secondary-btn">Logout</button>
         </header>
 
         <section class="dashboard-panel glass-panel">
@@ -34,10 +78,18 @@
             
             <div class="subject-section">
                 <h2>Subject Setup</h2>
-                <div class="select-wrapper">
+                <div class="select-wrapper" style="margin-bottom: 1rem;">
                     <select id="subject-select" disabled>
                         <option value="">Loading subjects...</option>
                     </select>
+                </div>
+                
+                <div class="info-grid">
+                    <div class="info-label" style="align-self: center;">Subject Code:</div>
+                    <input type="text" id="input-subject-code" class="profile-input" placeholder="e.g. 24CSH-301">
+                    
+                    <div class="info-label" style="align-self: center;">Subject Name:</div>
+                    <input type="text" id="input-subject-name" class="profile-input" placeholder="e.g. PBLJ">
                 </div>
             </div>
         </section>
@@ -58,7 +110,10 @@
                     <span class="checkmark"></span>
                     Force refresh (ignore AI cache)
                 </label>
-                <button id="generate-btn" class="primary-btn" disabled>Generate Report</button>
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <span id="remaining-generations" style="font-size: 0.875rem; color: var(--text-secondary); display: none;"></span>
+                    <button id="generate-btn" class="primary-btn" disabled>Generate Report</button>
+                </div>
             </div>
         </section>
 
@@ -79,17 +134,17 @@
                 </a>
             </div>
         </section>
-
-        <!-- Loading Overlay -->
-        <div id="loading-overlay" class="loading-overlay hidden">
-            <div class="spinner"></div>
-            <h3 id="loading-text">Generating Report...</h3>
-            <p>This may take up to a minute depending on AI response and Java compilation.</p>
-        </div>
-        
-        <!-- Toast Notification -->
-        <div id="toast" class="toast hidden"></div>
     </main>
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay hidden">
+        <div class="spinner"></div>
+        <h3 id="loading-text">Generating Report...</h3>
+        <p>This may take up to a minute depending on AI response and Java compilation.</p>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast hidden"></div>
 
     <script src="app.js?v=2"></script>
 </body>

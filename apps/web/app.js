@@ -23,28 +23,194 @@ document.addEventListener('DOMContentLoaded', () => {
         localStorage.setItem('labforge_user_id', userId);
     }
     
+    // Auth Elements
+    const landingContainer = document.getElementById('landing-container');
+    const appContainer = document.getElementById('app-container');
+    const tabLogin = document.getElementById('tab-login');
+    const tabSignup = document.getElementById('tab-signup');
+    const formLogin = document.getElementById('form-login');
+    const formSignup = document.getElementById('form-signup');
+    const logoutBtn = document.getElementById('logout-btn');
+    
+    // Login Elements
+    const loginBtn = document.getElementById('login-btn');
+    const loginUsername = document.getElementById('login-username');
+    const loginPassword = document.getElementById('login-password');
+    
+    // Signup Elements
+    const signupBtn = document.getElementById('signup-btn');
+    const signupUsername = document.getElementById('signup-username');
+    const signupPassword = document.getElementById('signup-password');
+    const signupName = document.getElementById('signup-name');
+    const signupUid = document.getElementById('signup-uid');
+    const signupBatch = document.getElementById('signup-batch');
+
+    const remainingGenerations = document.getElementById('remaining-generations');
+    
+    // Auth Token handling
+    let authToken = localStorage.getItem('labforge_token');
+    
     function getHeaders() {
-        return {
-            'X-User-ID': userId
-        };
+        const headers = { 'X-User-ID': userId };
+        if (authToken) {
+            headers['Authorization'] = `Bearer ${authToken}`;
+        }
+        return headers;
     }
 
-    // Load initial data
-    loadProfiles();
+    // Toggle Auth Tabs
+    tabLogin.addEventListener('click', () => {
+        tabLogin.classList.add('active');
+        tabSignup.classList.remove('active');
+        formLogin.classList.remove('hidden');
+        formSignup.classList.add('hidden');
+    });
+
+    tabSignup.addEventListener('click', () => {
+        tabSignup.classList.add('active');
+        tabLogin.classList.remove('active');
+        formSignup.classList.remove('hidden');
+        formLogin.classList.add('hidden');
+    });
+
+    // Helper: Show App
+    function showApp() {
+        landingContainer.classList.add('hidden');
+        appContainer.classList.remove('hidden');
+        loadProfiles();
+    }
+
+    // Helper: Show Landing
+    function showLanding() {
+        appContainer.classList.add('hidden');
+        landingContainer.classList.remove('hidden');
+    }
+    
+    // Login Flow
+    loginBtn.addEventListener('click', async () => {
+        const username = loginUsername.value.trim();
+        const password = loginPassword.value;
+        if (!username || !password) {
+            showToast('Enter username and password', 'error');
+            return;
+        }
+        
+        loginBtn.disabled = true;
+        try {
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+            
+            if (!res.ok) throw new Error('Invalid credentials');
+            const data = await res.json();
+            
+            authToken = data.access_token;
+            localStorage.setItem('labforge_token', authToken);
+            showApp();
+            
+        } catch(error) {
+            showToast(error.message, 'error');
+        } finally {
+            loginBtn.disabled = false;
+        }
+    });
+
+    // Signup Flow
+    signupBtn.addEventListener('click', async () => {
+        const username = signupUsername.value.trim();
+        const password = signupPassword.value;
+        if (!username || !password) {
+            showToast('Username and password are required', 'error');
+            return;
+        }
+
+        signupBtn.disabled = true;
+        try {
+            const payload = {
+                username: username,
+                password: password,
+                student_name: signupName.value.trim(),
+                uid: signupUid.value.trim(),
+                batch: signupBatch.value.trim()
+            };
+
+            const res = await fetch('/api/signup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || 'Signup failed');
+            }
+
+            // Immediately login after signup
+            const loginRes = await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+
+            if (!loginRes.ok) throw new Error('Signup succeeded but login failed');
+            const data = await loginRes.json();
+            
+            authToken = data.access_token;
+            localStorage.setItem('labforge_token', authToken);
+            showToast('Account created successfully!', 'success');
+            showApp();
+
+        } catch (error) {
+            showToast(error.message, 'error');
+        } finally {
+            signupBtn.disabled = false;
+        }
+    });
+
+    // Logout Flow
+    logoutBtn.addEventListener('click', () => {
+        authToken = null;
+        localStorage.removeItem('labforge_token');
+        showLanding();
+    });
+
+    // Check token on init
+    if (!authToken) {
+        showLanding();
+    } else {
+        showApp();
+    }
 
     async function loadProfiles() {
         try {
             const res = await fetch('/api/profiles', {
                 headers: getHeaders()
             });
+            if (res.status === 401) {
+                // Token invalid or expired
+                authToken = null;
+                localStorage.removeItem('labforge_token');
+                showLanding();
+                throw new Error('Session expired. Please log in again.');
+            }
             if (!res.ok) throw new Error('Failed to load profiles');
             const data = await res.json();
             
             renderStudent(data.student);
             renderSubjects(data.subjects);
+            
+            // Render user limits
+            if (data.user && data.user.role !== 'admin') {
+                remainingGenerations.textContent = `Generations remaining today: ${data.user.remaining_generations}`;
+                remainingGenerations.style.display = 'inline-block';
+            } else {
+                remainingGenerations.style.display = 'none';
+            }
         } catch (error) {
             showToast(error.message, 'error');
-            profileInfo.innerHTML = '<div class="status-error">Failed to load configuration. Is the server running?</div>';
+            if(authToken) profileInfo.innerHTML = '<div class="status-error">Failed to load configuration. Is the server running?</div>';
         }
     }
 
@@ -72,11 +238,26 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        window.loadedSubjects = subjects;
+
         subjectSelect.innerHTML = subjects.map(s => 
             `<option value="${s.subject_code}">${s.subject_code} - ${s.subject_name}</option>`
         ).join('');
         subjectSelect.disabled = false;
+        
+        updateSubjectInputs();
         checkCanGenerate();
+    }
+    
+    function updateSubjectInputs() {
+        const selectedCode = subjectSelect.value;
+        const subject = window.loadedSubjects?.find(s => s.subject_code === selectedCode);
+        if (subject) {
+            const codeInput = document.getElementById('input-subject-code');
+            const nameInput = document.getElementById('input-subject-name');
+            if (codeInput) codeInput.value = subject.subject_code;
+            if (nameInput) nameInput.value = subject.subject_name;
+        }
     }
 
     // Drag and Drop Handling
@@ -124,7 +305,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    subjectSelect.addEventListener('change', checkCanGenerate);
+    subjectSelect.addEventListener('change', () => {
+        updateSubjectInputs();
+        checkCanGenerate();
+    });
 
     // Generation
     generateBtn.addEventListener('click', async () => {
@@ -143,6 +327,12 @@ document.addEventListener('DOMContentLoaded', () => {
         
         const batchInput = document.getElementById('input-batch');
         if (batchInput) formData.append('batch', batchInput.value);
+        
+        const subjectCodeInput = document.getElementById('input-subject-code');
+        if (subjectCodeInput) formData.append('custom_subject_code', subjectCodeInput.value);
+        
+        const subjectNameInput = document.getElementById('input-subject-name');
+        if (subjectNameInput) formData.append('custom_subject_name', subjectNameInput.value);
 
         loadingOverlay.classList.remove('hidden');
         resultsPanel.classList.add('hidden');
@@ -156,12 +346,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (!res.ok) {
                 const errorData = await res.json().catch(() => ({}));
+                if (res.status === 401) {
+                    authToken = null;
+                    localStorage.removeItem('labforge_token');
+                    appContainer.style.display = 'none';
+                    loginOverlay.classList.remove('hidden');
+                }
                 throw new Error(errorData.detail || `Server error: ${res.status}`);
             }
 
             const data = await res.json();
             showResults(data);
             showToast('Report generated successfully!', 'success');
+            
+            if (data.remaining_generations !== undefined && data.remaining_generations !== -1) {
+                remainingGenerations.textContent = `Generations remaining today: ${data.remaining_generations}`;
+            }
+            
         } catch (error) {
             showToast(error.message, 'error');
         } finally {

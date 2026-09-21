@@ -53,9 +53,9 @@ class GeminiProvider:
 
     def __init__(self):
         self.api_key = os.environ.get("GEMINI_API_KEY", "")
-        self.model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+        self.model = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
         self.max_attempts = int(os.environ.get("GEMINI_MAX_ATTEMPTS", "5"))
-        fallback_str = os.environ.get("GEMINI_FALLBACK_MODELS", "")
+        fallback_str = os.environ.get("GEMINI_FALLBACK_MODELS", "gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash")
         self.fallback_models = [m.strip() for m in fallback_str.split(",") if m.strip()]
         self._client = None
 
@@ -90,12 +90,23 @@ class GeminiProvider:
                 except Exception as e:
                     last_error = e
                     code = getattr(e, "code", getattr(e, "status_code", 0))
+                    error_msg = str(e).lower()
                     print(f"    Model {model_name} (attempt {attempt+1}) failed (code={code}): {str(e)[:120]}")
                     
-                    if code in (429, 500, 503) and attempt < self.max_attempts - 1:
+                    if code == 429:
+                        if "per day" in error_msg or "daily" in error_msg:
+                            print(f"    Daily quota exhausted for {model_name}, moving to fallback immediately.")
+                            break  # Skip remaining attempts for this model
+                        
+                        if attempt < self.max_attempts - 1:
+                            # Exponential backoff for RPM limits
+                            time.sleep(min(2 ** attempt, 10))
+                            continue
+                    elif code in (500, 503) and attempt < self.max_attempts - 1:
                         time.sleep(min(2 ** attempt, 10))
                         continue
-                    # On other errors (like 404), break to try the next model
+                    
+                    # On other errors (like 404, 400) or exhausted attempts, break to try the next model
                     break
         
         raise last_error
