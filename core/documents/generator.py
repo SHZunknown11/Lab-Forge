@@ -150,6 +150,9 @@ class DocxGenerator:
         """Locate the insertion cursor after the metadata (first 6 paragraphs)."""
         if len(doc.paragraphs) > 6:
             self._insert_cursor = doc.paragraphs[6]
+            # Mark the cursor element so we can reliably find it later,
+            # bypassing any lxml proxy equality issues.
+            self._insert_cursor._element.set('is_cursor', 'true')
         else:
             self._insert_cursor = None
 
@@ -163,7 +166,7 @@ class DocxGenerator:
         found_cursor = False
         
         for child in list(body):
-            if child == self._insert_cursor._element:
+            if child.get('is_cursor') == 'true':
                 found_cursor = True
                 
             if found_cursor:

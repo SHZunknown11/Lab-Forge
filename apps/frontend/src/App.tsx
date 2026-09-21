@@ -9,6 +9,7 @@ import { DotPattern } from "@/components/ui/dot-pattern"
 import { Loader2, LogOut, FileText, Upload } from "lucide-react"
 import { ThemeProvider } from "@/components/theme-provider"
 import { ModeToggle } from "@/components/mode-toggle"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 const API_BASE = "http://localhost:8000/api"
 
@@ -40,11 +41,11 @@ export default function App() {
 
   useEffect(() => {
     if (token) {
-      fetchProfile()
+      fetchProfile(true)
     }
   }, [token])
 
-  const fetchProfile = async () => {
+  const fetchProfile = async (initialLoad = false) => {
     try {
       const res = await fetch(`${API_BASE}/profiles`, {
         headers: { Authorization: `Bearer ${token}` }
@@ -56,13 +57,16 @@ export default function App() {
       }
       const data = await res.json()
       setProfile(data)
-      if (data.subject_code) setSubjectCode(data.subject_code)
-      if (data.subject_name) setSubjectName(data.subject_name)
       
-      // Load user defaults into editable state
-      if (data.student?.student_name) setProfileName(data.student.student_name)
-      if (data.student?.uid) setProfileUid(data.student.uid)
-      if (data.student?.section_group) setProfileBatch(data.student.section_group)
+      if (initialLoad) {
+        if (data.subject_code) setSubjectCode(data.subject_code)
+        if (data.subject_name) setSubjectName(data.subject_name)
+        
+        // Load user defaults into editable state
+        if (data.student?.student_name) setProfileName(data.student.student_name)
+        if (data.student?.uid) setProfileUid(data.student.uid)
+        if (data.student?.section_group) setProfileBatch(data.student.section_group)
+      }
     } catch (err) {
       toast.error("Failed to fetch profile")
     }
@@ -163,14 +167,20 @@ export default function App() {
         throw new Error(err.detail || "Generation failed")
       }
       
-      const blob = await res.blob()
+      const data = await res.json()
+      
+      const docxUrl = data.docx_url.startsWith('http') ? data.docx_url : `http://localhost:8000${data.docx_url}`
+      const fileRes = await fetch(docxUrl)
+      if (!fileRes.ok) throw new Error("Failed to download generated report")
+      
+      const blob = await fileRes.blob()
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
       a.download = `Lab_Report_${subjectCode || 'General'}.docx`
       a.click()
       toast.success("Report generated successfully!")
-      fetchProfile() // Refresh quota
+      fetchProfile(false) // Refresh quota
     } catch (err: any) {
       toast.error(err.message)
     } finally {
@@ -337,39 +347,35 @@ export default function App() {
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="subject-code">Subject Code</Label>
-                  <Input 
-                    id="subject-code" 
-                    list="subject-codes"
+                  <Select 
                     value={subjectCode} 
-                    onChange={e => {
-                      setSubjectCode(e.target.value)
-                      const subject = profile?.subjects?.find((s: any) => s.subject_code === e.target.value)
+                    onValueChange={(val: string) => {
+                      setSubjectCode(val)
+                      const subject = profile?.subjects?.find((s: any) => s.subject_code === val)
                       if (subject) setSubjectName(subject.subject_name)
-                    }} 
-                    placeholder="e.g. 24CSH-301" 
-                    className="h-11 bg-muted/50" 
-                  />
-                  <datalist id="subject-codes">
-                    {profile?.subjects?.map((s: any) => (
-                      <option key={s.subject_code} value={s.subject_code} />
-                    ))}
-                  </datalist>
+                    }}
+                  >
+                    <SelectTrigger className="h-11 bg-muted/50">
+                      <SelectValue placeholder="Select or type subject code..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {profile?.subjects?.map((s: any) => (
+                        <SelectItem key={s.subject_code} value={s.subject_code}>
+                          {s.subject_code} - {s.subject_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="subject-name">Subject Name</Label>
                   <Input 
                     id="subject-name" 
-                    list="subject-names"
                     value={subjectName} 
                     onChange={e => setSubjectName(e.target.value)} 
                     placeholder="e.g. PBLJ" 
                     className="h-11 bg-muted/50" 
                   />
-                  <datalist id="subject-names">
-                    {profile?.subjects?.map((s: any) => (
-                      <option key={s.subject_name} value={s.subject_name} />
-                    ))}
-                  </datalist>
                 </div>
               </CardContent>
             </Card>
