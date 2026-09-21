@@ -24,6 +24,7 @@ def generate_report(
     source_path: str,
     subject_code: str,
     force_refresh: bool = False,
+    student_override = None,
 ) -> ReportManifest:
     """
     Full pipeline: parse → AI generate → execute → screenshot → DOCX → validate.
@@ -39,9 +40,15 @@ def generate_report(
     # 2. Load profiles
     print("[2/7] Loading profiles...")
     profile_mgr = ProfileManager()
-    student = profile_mgr.get_student_profile()
+    
+    if student_override:
+        student = student_override
+    else:
+        student = profile_mgr.get_student_profile()
+        
     if not student:
         raise RuntimeError("No student profile configured. Run: labforge profile set ...")
+        
     subject = profile_mgr.get_subject(subject_code)
     if not subject:
         raise RuntimeError(f"Subject '{subject_code}' not found. Run: labforge subject add ...")

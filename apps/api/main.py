@@ -45,6 +45,9 @@ async def api_generate(
     file: UploadFile = File(...),
     subject_code: str = Form(...),
     force_refresh: bool = Form(False),
+    student_name: str | None = Form(None),
+    uid: str | None = Form(None),
+    batch: str | None = Form(None),
     x_user_id: str | None = Header(None)
 ):
     try:
@@ -53,8 +56,25 @@ async def api_generate(
             shutil.copyfileobj(file.file, temp_file)
             temp_path = temp_file.name
 
+        # Construct student override if provided
+        student_override = None
+        if student_name or uid or batch:
+            # Fallback to existing for other fields like university
+            profile_mgr = ProfileManager()
+            base_student = profile_mgr.get_student_profile()
+            
+            from core.schemas import StudentProfile
+            student_override = StudentProfile(
+                student_name=student_name if student_name is not None else (base_student.student_name if base_student else "Unknown"),
+                uid=uid if uid is not None else (base_student.uid if base_student else "Unknown"),
+                section_group=batch if batch is not None else (base_student.section_group if base_student else "Unknown"),
+                branch=base_student.branch if base_student else "Unknown",
+                semester=base_student.semester if base_student else "Unknown",
+                university=base_student.university if base_student else "Unknown"
+            )
+
         # Run the orchestrator
-        manifest = generate_report(temp_path, subject_code, force_refresh)
+        manifest = generate_report(temp_path, subject_code, force_refresh, student_override=student_override)
         
         # Clean up temp file
         os.remove(temp_path)

@@ -55,12 +55,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         profileInfo.innerHTML = `
-            <div class="info-label">Name:</div>
-            <div class="info-value">${student.student_name}</div>
-            <div class="info-label">Roll Number:</div>
-            <div class="info-value">${student.uid}</div>
-            <div class="info-label">Batch:</div>
-            <div class="info-value">${student.section_group || 'N/A'}</div>
+            <div class="info-label" style="align-self: center;">Name:</div>
+            <input type="text" id="input-student-name" class="profile-input" value="${student.student_name}">
+            
+            <div class="info-label" style="align-self: center;">Roll Number:</div>
+            <input type="text" id="input-uid" class="profile-input" value="${student.uid}">
+            
+            <div class="info-label" style="align-self: center;">Batch:</div>
+            <input type="text" id="input-batch" class="profile-input" value="${student.section_group || ''}">
         `;
     }
 
@@ -132,6 +134,15 @@ document.addEventListener('DOMContentLoaded', () => {
         formData.append('file', selectedFile);
         formData.append('subject_code', subjectSelect.value);
         formData.append('force_refresh', forceRefresh.checked);
+        
+        const studentNameInput = document.getElementById('input-student-name');
+        if (studentNameInput) formData.append('student_name', studentNameInput.value);
+        
+        const uidInput = document.getElementById('input-uid');
+        if (uidInput) formData.append('uid', uidInput.value);
+        
+        const batchInput = document.getElementById('input-batch');
+        if (batchInput) formData.append('batch', batchInput.value);
 
         loadingOverlay.classList.remove('hidden');
         resultsPanel.classList.add('hidden');
