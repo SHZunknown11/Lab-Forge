@@ -7,7 +7,7 @@ from typing import Optional
 
 from core.schemas import StudentProfile, SubjectProfile
 
-CONFIG_DIR = Path("config")
+CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 STUDENT_PROFILE_PATH = CONFIG_DIR / "student_profile.json"
 SUBJECTS_PATH = CONFIG_DIR / "subjects.json"
 

@@ -1,11 +1,12 @@
-"""Pydantic data models for the entire LabForge pipeline."""
+"""Pydantic data models shared by the API, pipeline and CLI."""
 from __future__ import annotations
 
-from typing import Optional, Union
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
 
 
-# ── Student & Subject ──────────────────────────────────────────────
+# ── Stored defaults (CLI) ─────────────────────────────────────────
 
 class StudentProfile(BaseModel):
     student_name: str
@@ -23,101 +24,111 @@ class SubjectProfile(BaseModel):
     template_reference: str
 
 
-# ── Experiment source ──────────────────────────────────────────────
+# ── What the model writes ─────────────────────────────────────────
+# Kept deliberately small: every field here is paid for in output tokens.
 
-class ExperimentMetadata(BaseModel):
-    experiment_number: str
+LANGUAGES = (
+    "java", "python", "c", "cpp", "javascript", "react", "html", "matlab", "sql", "r", "shell", "other",
+)
+
+
+class AIFile(BaseModel):
+    name: str
+    code: str
+
+
+class AITask(BaseModel):
     title: str
-    aim: str = ""
-    co_mapping: str = ""
+    problem: str
+    objectives: list[str]
+    language: str
+    files: list[AIFile]
+    stdin: str
 
 
-class ExperimentLevel(BaseModel):
-    problem_statement: str = ""
-    objectives: str = ""
-    code: str = ""
-    filename: str = ""
+class AIReport(BaseModel):
+    experiment_no: str
+    title: str
+    aim: str
+    tasks: list[AITask]
+    learning_outcomes: list[str]
 
 
-class ExperimentDocument(BaseModel):
-    metadata: ExperimentMetadata
-    easy: Optional[ExperimentLevel] = None
-    medium: Optional[ExperimentLevel] = None
-    hard: Optional[ExperimentLevel] = None
-    objectives: str = ""
-    apparatus: str = ""
-    reading_material: str = ""
+class AIFix(BaseModel):
+    index: int
+    files: list[AIFile]
+    stdin: str
 
 
-# ── AI‑generated content ──────────────────────────────────────────
+class AIFixes(BaseModel):
+    fixes: list[AIFix]
 
-from pydantic import BaseModel, Field, field_validator
 
-class GeneratedLevel(BaseModel):
-    problem_statement: str = ""
-    objectives: str = ""
-    filename: str = ""
-    code: str = ""
-    expected_behavior: str = ""
+# ── Draft the student reviews and edits ───────────────────────────
+
+RunStatus = Literal["passed", "failed", "not_run"]
+
+
+class CodeFile(BaseModel):
+    name: str = Field(default="main", max_length=120)
+    code: str = Field(default="", max_length=60_000)
+
+
+class Task(BaseModel):
+    title: str = ""
+    problem: str = ""
+    objectives: list[str] = Field(default_factory=list)
+    language: str = "other"
+    files: list[CodeFile] = Field(default_factory=list)
+    stdin: str = ""
+    # Filled only by the executor, never by the model.
+    output: str = ""
+    status: RunStatus = "not_run"
+    note: str = ""
+    # File names inside the job folder: captured figures and uploaded screenshots.
+    images: list[str] = Field(default_factory=list)
+    show_console: bool = True
 
     @field_validator("objectives", mode="before")
-    def validate_objectives(cls, v):
-        if isinstance(v, list):
-            return "\n".join(str(item) for item in v)
+    @classmethod
+    def _split_objectives(cls, v):
+        if isinstance(v, str):
+            return [line.strip(" •-*\t") for line in v.splitlines() if line.strip(" •-*\t")]
         return v
 
 
-class GeneratedContent(BaseModel):
-    experiment_number: Union[str, int] = ""
+class ReportDraft(BaseModel):
+    experiment_no: str = ""
     title: str = ""
-    global_aim: str = ""
-    easy: Optional[GeneratedLevel] = None
-    medium: Optional[GeneratedLevel] = None
-    hard: Optional[GeneratedLevel] = None
+    aim: str = ""
+    tasks: list[Task] = Field(default_factory=list)
     learning_outcomes: list[str] = Field(default_factory=list)
 
 
-# ── Execution evidence ────────────────────────────────────────────
-
-class ExecutionResult(BaseModel):
-    stdout: str = ""
-    stderr: str = ""
-    exit_code: int = 0
-    duration_ms: int = 0
+class MetaField(BaseModel):
+    label: str = Field(max_length=60)
+    value: str = Field(default="", max_length=200)
 
 
-class ExecutionEvidence(BaseModel):
-    level: str
-    source_code: str
-    compilation_result: ExecutionResult
-    execution_result: Optional[ExecutionResult] = None
-    success: bool = False
+class RenderRequest(BaseModel):
+    draft: ReportDraft
+    fields: list[MetaField] = Field(max_length=24)
+    template: str = "cu-cse"
+    pdf: bool = True
+    sign_code: bool = False  # add "Name - UID" as a comment on top of each file
 
 
-# ── Screenshots ───────────────────────────────────────────────────
+# ── Execution ─────────────────────────────────────────────────────
 
-class ScreenshotArtifact(BaseModel):
-    level: str
-    image_path: str
-    width: int = 0
-    height: int = 0
+class RunResult(BaseModel):
+    status: RunStatus
+    output: str = ""
+    note: str = ""
+    figures: list[str] = Field(default_factory=list)  # absolute paths of produced images
+    retryable: bool = False  # True when an AI fix could plausibly help
 
-
-# ── Validation ────────────────────────────────────────────────────
 
 class ValidationResult(BaseModel):
     is_valid: bool = True
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
-
-
-# ── Report manifest ──────────────────────────────────────────────
-
-class ReportManifest(BaseModel):
-    source_identifier: str = ""
-    subject_code: str = ""
-    docx_path: str = ""
-    pdf_path: Optional[str] = None
-    execution_evidences: dict[str, ExecutionEvidence] = Field(default_factory=dict)
-    screenshot_artifacts: dict[str, ScreenshotArtifact] = Field(default_factory=dict)
-    validation_status: ValidationResult = Field(default_factory=ValidationResult)

@@ -1,57 +1,28 @@
 # Security
 
-LabForge will eventually compile and execute generated Java code. That is a high-risk operation and must be isolated from report generation and storage.
+The main risk is running code that a model wrote from a sheet anyone can
+upload: a crafted sheet can steer the model into writing hostile code. Treat
+every program as untrusted.
 
-## Generated-code Execution Risks
+## In place
 
-Generated or user-supplied code may:
+- **No secrets in child processes.** Programs get a minimal environment
+  (`PATH`, temp folders, encoding settings); API keys never reach them.
+- **Timeouts** on every compile, run, React build and screenshot.
+- **Contained file names.** Paths from the model are reduced to safe relative
+  names inside the work folder (`safe_rel`).
+- **No outbound requests from screenshotted pages.** Chrome uses a dead proxy,
+  with only LabForge's throwaway static server reachable
+  (`HTML_ALLOW_NETWORK=0`). This blocks SSRF to internal services.
+- **Uploads are re-encoded** to PNG with Pillow; anything that isn't an image is refused.
+- **Unguessable job ids** (UUID4) and strict file-name patterns on download routes.
+- **Per-IP limits** on new sheets, runs, renders and uploads.
+- **Jobs expire** after `LABFORGE_JOB_TTL_HOURS`.
 
-- Run forever or consume excessive CPU.
-- Allocate excessive memory.
-- Read or write unintended files.
-- Attempt network access.
-- Spawn child processes.
-- Print misleading output.
-- Exploit local tooling or environment assumptions.
+## Required for a public deployment
 
-LabForge must never treat generated code as trusted.
-
-## Local MVP Isolation
-
-For a local MVP, execution should use temporary directories outside the source tree, strict timeouts, controlled input, and explicit cleanup. Generated Java files, class files, and execution logs should not be written into `examples/` or `templates/`.
-
-The MVP should separate:
-
-- Source references
-- Template files
-- Temporary compilation directories
-- Captured output
-- Final artifacts
-
-## Future Sandbox Requirements
-
-Production execution should use a stronger sandbox than a local temporary directory. A future sandbox should provide:
-
-- Filesystem isolation
-- CPU and memory limits
-- Wall-clock timeout
-- Process count limits
-- Network denial by default
-- Clean environment variables
-- Auditable stdout, stderr, and exit status
-
-Container, VM, or dedicated sandbox workers should be evaluated before production use.
-
-## File-system Isolation
-
-Execution code should receive only the files required for compilation and runtime. It should not have write access to references, templates, application code, profile data, or generated reports.
-
-Generated artifacts should be written only to configured artifact locations.
-
-## Timeout and Resource Limits
-
-Each compile and run step should have explicit limits. Timeout failures should be validation failures, not partial successes. Large output should be capped and marked as truncated.
-
-## Network Restrictions
-
-Production execution should deny network access by default. Java lab programs for the first MVP do not require external network access. Any future exception should be explicit, audited, and scoped to the experiment.
+`EXEC_BACKEND=local` runs programs as the server's user, which is fine on your
+own machine and not enough on the internet. Run the provided container
+(unprivileged user, memory, CPU and process limits) or use
+`EXEC_BACKEND=docker` for one network-less container per run. See
+[deployment.md](deployment.md).

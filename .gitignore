@@ -57,3 +57,11 @@ logs.db
 Test_report/
 test_out.docx
 HANDOFF_TO_CHATGPT.txt
+
+# Runtimes for student programs (installed by scripts/setup_runtime.py)
+.runtime/
+
+# Personal data: kept on your machine, never committed
+config/student_profile.json
+config/users.json
+config/usage.json

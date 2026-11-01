@@ -1,319 +1,279 @@
-"""End-to-end pipeline orchestrator coordinating all stages."""
+"""Report pipeline.
+
+draft:  sheet text -> model (or cache) -> run every program -> one batched fix
+        round for failures -> ReportDraft the student can edit
+run:    re-run one edited task (no model call)
+render: draft + student fields -> DOCX (+ PDF and page previews); no model call
+"""
 from __future__ import annotations
 
+import os
+import random
 import re
+import shutil
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Iterator
 
-from core.ingestion.parser import parse_source_file
-from core.profiles.manager import ProfileManager
-from core.ai.provider import AIOrchestrator
-from core.execution.runner import JavaRunner
-from core.screenshots.terminal_renderer import TerminalRenderer
-from core.documents.generator import DocxGenerator
-from core.validation.validator import DocumentValidator
-from core.schemas import (
-    ExecutionEvidence,
-    ExecutionResult,
-    GeneratedContent,
-    ReportManifest,
-    ScreenshotArtifact,
-)
+from core.ai.provider import AIError, DraftCache, get_provider
+from core.documents.generator import ReportWriter, safe_filename
+from core.documents.pdf_converter import PdfConversionError, PdfConverter
+from core.execution.runner import CodeRunner, prepare_java, unlink_node_modules
+from core.schemas import AIFile, AIReport, AITask, CodeFile, RenderRequest, ReportDraft, RunResult, Task
+from core.screenshots.terminal_renderer import render_console
+from core.validation.pdf_renderer import PdfPreviewRenderer
+
+ROOT = Path(__file__).resolve().parents[2]
+JOBS_ROOT = Path(os.environ.get("LABFORGE_JOBS_DIR", ROOT / "artifacts" / "jobs"))
+JOB_ID = re.compile(r"^[a-f0-9]{32}$")
+FILE_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
+CONSOLE_PPI = 192  # console PNGs are drawn at 2x
+IMAGE_PPI = 110
 
 
-def generate_report(
-    source_path: str,
-    subject_code: str,
-    force_refresh: bool = False,
-    student_override = None,
-    subject_override = None,
-) -> ReportManifest:
-    """
-    Full pipeline: parse → AI generate → execute → screenshot → DOCX → validate.
+# ── jobs ───────────────────────────────────────────────────────────
 
-    Returns a ReportManifest with paths to generated files and execution evidence.
-    """
-    # 1. Parse source
-    print(f"[1/7] Parsing source: {source_path}")
-    document = parse_source_file(source_path)
-    exp_num = document.metadata.experiment_number
-    exp_title = document.metadata.title or f"Experiment {exp_num}"
+def new_job() -> tuple[str, Path]:
+    job_id = uuid.uuid4().hex
+    path = JOBS_ROOT / job_id
+    path.mkdir(parents=True, exist_ok=True)
+    return job_id, path
 
-    # 2. Load profiles
-    print("[2/7] Loading profiles...")
-    profile_mgr = ProfileManager()
-    
-    if student_override:
-        student = student_override
-    else:
-        student = profile_mgr.get_student_profile()
-        
-    if not student:
-        raise RuntimeError("No student profile configured. Run: labforge profile set ...")
-        
-    if subject_override:
-        subject = subject_override
-    else:
-        subject = profile_mgr.get_subject(subject_code)
-        
-    if not subject:
-        raise RuntimeError(f"Subject '{subject_code}' not found. Run: labforge subject add ...")
 
-    # 3. AI generation
-    print("[3/7] Generating structured content...")
-    ai = AIOrchestrator()
-    generated = ai.generate(document, force_refresh=force_refresh)
+def job_path(job_id: str) -> Path | None:
+    if not JOB_ID.match(job_id or ""):
+        return None
+    path = JOBS_ROOT / job_id
+    return path if path.is_dir() else None
 
-    # Merge source code into generated if AI didn't provide it
-    _merge_source_code(document, generated)
 
-    # 4. Execute Java code
-    print("[4/7] Compiling and executing Java code...")
-    execution_evidences: dict[str, ExecutionEvidence] = {}
-    runner = JavaRunner(timeout_seconds=15)
+RENDER_ID = re.compile(r"^r_[a-f0-9]{8}$")
 
-    for level_name in ("easy", "medium", "hard"):
-        gen_level = getattr(generated, level_name, None)
-        src_level = getattr(document, level_name, None)
-        code = ""
-        filename = ""
 
-        if gen_level and gen_level.code:
-            code = gen_level.code
-            filename = gen_level.filename
-        elif src_level and src_level.code:
-            code = src_level.code
+def job_file(job_id: str, name: str, render_id: str = "") -> Path | None:
+    base = job_path(job_id)
+    if base is None or not FILE_NAME.match(name or "") or name.startswith("."):
+        return None
+    if render_id:
+        if not RENDER_ID.match(render_id):
+            return None
+        base = base / render_id
+    candidate = base / name
+    return candidate if candidate.is_file() else None
 
-        if not code:
+
+def purge_old_jobs(max_age_hours: float) -> int:
+    if not JOBS_ROOT.exists():
+        return 0
+    cutoff = time.time() - max_age_hours * 3600
+    removed = 0
+    for path in JOBS_ROOT.iterdir():
+        try:
+            if path.is_dir() and path.stat().st_mtime < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+                removed += 1
+        except OSError:
             continue
+    return removed
 
-        # Clean up the Java code for compilation
-        code = _prepare_java_code(code)
 
-        # Determine filename from the public class name
-        if not filename:
-            filename = _extract_filename(code)
+# ── draft ──────────────────────────────────────────────────────────
 
-        # Determine test input for interactive programs
-        test_input = _determine_test_input(code, level_name, document)
+def build_draft(
+    sheet: str,
+    job_dir: Path,
+    language: str = "",
+    subject: str = "",
+    fresh: bool = False,
+    provider=None,
+    cache: DraftCache | None = None,
+    runner: CodeRunner | None = None,
+) -> Iterator[dict]:
+    provider = provider or get_provider()
+    cache = cache or DraftCache()
+    runner = runner or CodeRunner()
 
-        print(f"  -> Executing {level_name}: {filename}")
-        comp_result, exec_result = runner.execute(filename, code, test_input=test_input)
+    key = DraftCache.key(sheet, language, subject)
+    report = None if fresh else cache.get(key)
+    cached = report is not None
+    if cached:
+        yield {"type": "stage", "stage": "write", "text": "Found this sheet already written, reusing it"}
+    else:
+        yield {"type": "stage", "stage": "write", "text": "Writing the report and programs"}
+        variant = random.randint(1, 999) if fresh else 0
+        report = provider.generate(sheet, language, subject, variant)
+        if not fresh:
+            cache.put(key, report)
 
-        success = (
-            comp_result.exit_code == 0
-            and exec_result is not None
-            and exec_result.exit_code == 0
-        )
+    draft = to_draft(report)
+    yield {"type": "draft", "draft": draft.model_dump()}
 
-        evidence = ExecutionEvidence(
-            level=level_name,
-            source_code=code,
-            compilation_result=comp_result,
-            execution_result=exec_result,
-            success=success,
-        )
-        execution_evidences[level_name] = evidence
+    yield {"type": "stage", "stage": "run", "text": "Compiling and running each program"}
+    results = yield from _run_all(draft, job_dir, runner, range(len(draft.tasks)))
 
-        if not success:
-            stderr = comp_result.stderr if comp_result.exit_code != 0 else (exec_result.stderr if exec_result else "")
-            print(f"  ! {level_name} failed: {stderr[:200]}")
+    failing = [i for i, r in results.items() if r.status == "failed" and r.retryable]
+    if failing and getattr(provider, "name", "") != "local":
+        yield {"type": "stage", "stage": "fix",
+               "text": f"Fixing {len(failing)} program{'s' if len(failing) > 1 else ''} that didn't run"}
+        items = [{
+            "index": i,
+            "language": draft.tasks[i].language,
+            "error": (draft.tasks[i].output or draft.tasks[i].note)[-1500:],
+            "files": [f.model_dump() for f in draft.tasks[i].files],
+            "stdin": draft.tasks[i].stdin,
+        } for i in failing]
+        try:
+            fixes = provider.fix(items).fixes
+        except AIError:
+            fixes = []
+        changed = []
+        for fx in fixes:
+            if fx.index in failing and any(f.code.strip() for f in fx.files):
+                draft.tasks[fx.index].files = [CodeFile(name=f.name, code=f.code.rstrip()) for f in fx.files]
+                draft.tasks[fx.index].stdin = fx.stdin
+                changed.append(fx.index)
+        if changed:
+            fixed = yield from _run_all(draft, job_dir, runner, changed)
+            if not fresh and any(r.status == "passed" for r in fixed.values()):
+                for i in changed:
+                    report.tasks[i].files = [AIFile(name=f.name, code=f.code) for f in draft.tasks[i].files]
+                    report.tasks[i].stdin = draft.tasks[i].stdin
+                cache.put(key, report)  # the next student skips the fix
 
-    # 5. Render screenshots
-    print("[5/7] Rendering output screenshots...")
-    artifacts_dir = Path("artifacts") / f"exp_{exp_num}"
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
-    screenshot_dir = artifacts_dir / "screenshots"
+    yield {"type": "done", "draft": draft.model_dump(), "cached": cached}
 
-    renderer = TerminalRenderer()
-    screenshot_artifacts: dict[str, ScreenshotArtifact] = {}
 
-    for level_name, evidence in execution_evidences.items():
-        if evidence.success:
-            artifact = renderer.render(evidence, screenshot_dir)
-            screenshot_artifacts[level_name] = artifact
-
-    # 6. Generate DOCX
-    print("[6/7] Generating DOCX report...")
-    template_path = subject.template_reference
-    safe_title = re.sub(r"[^\w\s-]", "", exp_title).strip().replace(" ", "_")
-    docx_path = str(artifacts_dir / f"{safe_title}_Report.docx")
-
-    generator = DocxGenerator()
-    generator.generate(
-        template_path=template_path,
-        output_path=docx_path,
-        student=student,
-        subject=subject,
-        experiment=document,
-        generated=generated,
-        screenshots=screenshot_artifacts,
+def to_draft(report: AIReport) -> ReportDraft:
+    no = str(report.experiment_no).strip()
+    return ReportDraft(
+        experiment_no=no,
+        title=report.title.strip() or (f"Experiment {no}" if no else "Experiment"),
+        aim=report.aim.strip(),
+        tasks=[_task(t) for t in report.tasks],
+        learning_outcomes=[o.strip() for o in report.learning_outcomes if o.strip()],
     )
 
-    # 7. Validate
-    print("[7/7] Validating report...")
-    validator = DocumentValidator()
-    validation_result = validator.validate(docx_path)
 
-    if validation_result.is_valid:
-        print(f"[OK] Report generated successfully: {docx_path}")
-    else:
-        print(f"[WARN] Validation failed: {len(validation_result.errors)} errors")
-        for error in validation_result.errors:
-            print(f"  - {error}")
-
-    manifest = ReportManifest(
-        source_identifier=source_path,
-        subject_code=subject_code,
-        docx_path=docx_path,
-        execution_evidences=execution_evidences,
-        screenshot_artifacts=screenshot_artifacts,
-        validation_status=validation_result,
+def _task(t: AITask) -> Task:
+    return Task(
+        title=t.title.strip(), problem=t.problem.strip(), objectives=t.objectives,
+        language=(t.language or "other").lower().strip(),
+        files=[CodeFile(name=f.name.strip(), code=f.code.rstrip()) for f in t.files if f.code.strip()],
+        stdin=t.stdin,
     )
 
-    # Save manifest
-    manifest_path = artifacts_dir / "manifest.json"
-    manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
 
-    return manifest
-
-
-def _merge_source_code(document, generated: GeneratedContent) -> None:
-    """If the source has code but AI didn't generate any, copy from source."""
-    for level_name in ("easy", "medium", "hard"):
-        gen_level = getattr(generated, level_name, None)
-        src_level = getattr(document, level_name, None)
-        if src_level and src_level.code and gen_level:
-            if not gen_level.code:
-                gen_level.code = src_level.code
-            if not gen_level.problem_statement and src_level.problem_statement:
-                gen_level.problem_statement = src_level.problem_statement
+def _run_all(draft: ReportDraft, job_dir: Path, runner: CodeRunner, indexes) -> Iterator[dict]:
+    results: dict[int, RunResult] = {}
+    indexes = list(indexes)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {pool.submit(run_task, job_dir, i, draft.tasks[i], runner): i for i in indexes}
+        for fut in as_completed(futures):
+            i = futures[fut]
+            results[i] = fut.result()
+            t = draft.tasks[i]
+            yield {"type": "task", "index": i, "title": t.title, "status": t.status, "note": t.note}
+    return results
 
 
-def _extract_filename(code: str) -> str:
-    """Extract the public class name from Java code to determine the filename."""
-    # Look for: public class Foo, public abstract class Foo
-    match = re.search(r"public\s+(?:abstract\s+)?class\s+(\w+)", code)
-    if match:
-        return f"{match.group(1)}.java"
-    # Fallback: any class declaration
-    match = re.search(r"class\s+(\w+)", code)
-    if match:
-        return f"{match.group(1)}.java"
-    return "Main.java"
+def run_task(job_dir: Path, index: int, task: Task, runner: CodeRunner | None = None) -> RunResult:
+    """Run `task` and write the result (output, status, note, figures) back onto it."""
+    runner = runner or CodeRunner()
+    work = job_dir / f".run_{index}_{uuid.uuid4().hex[:6]}"
+    try:
+        result = runner.run(task.language, task.files, task.stdin, work)
+        # Captured figures replace earlier captured figures; uploads are kept.
+        captured = [n for n in task.images if re.match(r"t\d+_fig", n)]
+        for name in captured:
+            if FILE_NAME.match(name):
+                (job_dir / name).unlink(missing_ok=True)
+        kept = [n for n in task.images if n not in captured]
+        figures = []
+        stamp = uuid.uuid4().hex[:4]
+        for n, src in enumerate(result.figures, start=1):
+            name = f"t{index}_fig{n}_{stamp}.png"
+            shutil.move(src, job_dir / name)
+            figures.append(name)
+        task.output = result.output
+        task.status = result.status
+        task.note = result.note
+        task.images = figures + kept
+        return result
+    finally:
+        unlink_node_modules(work)  # never follow the junction into the shared runtime
+        shutil.rmtree(work, ignore_errors=True)
 
 
-def _determine_test_input(code: str, level_name: str, document) -> str:
-    """Determine appropriate test input for interactive Java programs."""
-    if "Scanner" not in code:
-        return ""
+# ── render ─────────────────────────────────────────────────────────
 
-    code_lower = code.lower()
+def render_report(job_dir: Path, req: RenderRequest) -> dict:
+    # Each render gets its own folder, so a file that is still being downloaded
+    # (and locked, on Windows) never blocks the next render.
+    for old in job_dir.glob("r_*"):
+        shutil.rmtree(old, ignore_errors=True)
+    render_id = f"r_{uuid.uuid4().hex[:8]}"
+    out = job_dir / render_id
+    out.mkdir(parents=True)
 
-    # Count how many nextInt/nextLine/next calls exist to estimate input needs
-    import re
-    next_calls = len(re.findall(r'next(?:int|double|line|float|long|short|byte)\s*\(', code_lower))
-    next_calls += len(re.findall(r'\.next\(\)', code_lower))
+    draft = req.draft
+    task_images: list[list[tuple[Path, float]]] = []
+    warnings: list[str] = []
+    for i, task in enumerate(draft.tasks):
+        images: list[tuple[Path, float]] = []
+        own = [job_dir / n for n in task.images if FILE_NAME.match(n) and (job_dir / n).is_file()]
+        if task.show_console and (task.output.strip() or (task.status == "passed" and not own)):
+            shot = out / f"console_{i + 1}.png"
+            render_console(task.output, shot, command=_command(task))
+            images.append((shot, CONSOLE_PPI))
+        images += [(p, IMAGE_PPI) for p in own]
+        if not images:
+            warnings.append(f"{task.title or f'Task {i + 1}'} has no output yet.")
+        task_images.append(images)
 
-    # Menu-driven programs (CRUD, switch-case menus)
-    if any(kw in code_lower for kw in ['switch', 'menu', 'choice', 'crud', 'option']):
-        # Provide generous menu input: select options then exit
-        return "1\nTest\n100\nDept\n2\n1\n3\n1\n5\n0\n-1\nexit\nno\n"
+    values = {f.label.strip().lower(): f.value.strip() for f in req.fields}
+    base = safe_filename(draft.title or f"Experiment {draft.experiment_no}", values.get("student name", ""))
+    signature = ""
+    if req.sign_code:
+        signature = " - ".join(v for v in (values.get("student name", ""), values.get("uid", "")) if v)
+    docx = ReportWriter().write(req.template, out / f"{base}.docx", req.fields, draft, task_images,
+                                signature=signature)
+    for f in req.fields:
+        if f.label.strip() and not f.value.strip():
+            warnings.append(f"{f.label.strip()} is blank.")
 
-    # Programs with multiple scanner reads
-    if next_calls >= 3:
-        return "1\nTest\n100\n2\nDemo\n200\n0\nexit\n"
-
-    # Specific patterns
-    if "nextdouble" in code_lower or "square root" in code_lower:
-        return "67\n"
-    elif "pin" in code_lower and "withdraw" in code_lower:
-        return "1234\n500\n"
-    elif "yes/no" in code_lower or "y/n" in code_lower:
-        return "yes\n"
-    elif "scanner.nextline" in code_lower:
-        return "test input\n"
-    elif "scanner.nextint" in code_lower:
-        return "1\n2\n3\n0\n"
-    elif "scanner.next()" in code_lower:
-        return "test\n"
-
-    return "1\ntest\n0\n"
-
-
-def _prepare_java_code(code: str) -> str:
-    """
-    Clean up Java code for compilation:
-    - Remove package declarations (we compile in temp dirs)
-    - Remove 'abstract' from classes that have main() (can't run abstract classes)
-    - Remove excessive blank lines
-    - Ensure only one public class exists per file
-    - Hoist all import statements to the top
-    """
-    lines = code.split("\n")
-    cleaned: list[str] = []
-    
-    imports = []
-    import_pattern = r"^[ \t]*import\s+[^;]+;"
-
-    for line in lines:
-        stripped = line.strip()
-
-        # Remove package declarations
-        if re.match(r"^package\s+\w+", stripped):
-            continue
-            
-        if re.match(import_pattern, stripped):
-            if stripped not in imports:
-                imports.append(stripped)
-            continue
-
-        # Skip empty lines if the last line was also empty (collapse double blanks)
-        if not stripped and cleaned and not cleaned[-1].strip():
-            continue
-
-        cleaned.append(line)
-
-    code = "\n".join(cleaned).strip()
-    
-    if imports:
-        code = "\n".join(imports) + "\n\n" + code
-
-    # Remove 'abstract' from class declarations that contain main()
-    if "public static void main" in code:
-        code = re.sub(
-            r"public\s+abstract\s+class\s+",
-            "public class ",
-            code,
-        )
-
-    # Ensure only one public class — make non-main public classes package-private
-    public_classes = re.findall(r"public\s+class\s+(\w+)", code)
-    if len(public_classes) > 1:
-        # Find which class has main()
-        main_class = None
-        main_idx = code.find("public static void main")
-        if main_idx != -1:
-            best_dist = float('inf')
-            for match in re.finditer(r"(?:public\s+)?class\s+(\w+)", code):
-                cls_idx = match.start()
-                if cls_idx < main_idx:
-                    dist = main_idx - cls_idx
-                    if dist < best_dist:
-                        best_dist = dist
-                        main_class = match.group(1)
+    result = {"render": render_id, "docx": docx.name, "pdf": None, "pages": [], "warnings": warnings}
+    if req.pdf:
+        converter = PdfConverter()
+        if converter.available():
+            try:
+                pdf = converter.convert(str(docx), str(out / f"{base}.pdf"))
+                result["pdf"] = Path(pdf.pdf_path).name
+                previews = PdfPreviewRenderer(dpi=60).render(pdf.pdf_path, str(out / "pages"), max_pages=30)
+                for n, src in enumerate(previews, start=1):
+                    name = f"page_{n:02d}.png"
+                    shutil.move(src, out / name)
+                    result["pages"].append(name)
+                shutil.rmtree(out / "pages", ignore_errors=True)
+            except PdfConversionError as exc:
+                result["pdf_error"] = str(exc)
         else:
-            # Fallback to the first public class if no main is found
-            main_class = public_classes[0]
+            result["pdf_error"] = "PDF export isn't set up on this server. The Word file has everything."
+    return result
 
-        if main_class:
-            # Make all other public classes package-private
-            for cls_name in public_classes:
-                if cls_name != main_class:
-                    code = code.replace(
-                        f"public class {cls_name}",
-                        f"class {cls_name}",
-                        1,
-                    )
 
-    return code
-
+def _command(task: Task) -> str:
+    lang = task.language
+    names = [f.name for f in task.files]
+    if lang == "java" and task.files:
+        main = next((f.code for f in task.files if "void main" in f.code), task.files[0].code)
+        return f"java {prepare_java(main)[1]}"
+    if lang == "python":
+        entry = next((n for n in names if n.endswith("main.py")), names[0] if names else "main.py")
+        return f"python {entry}"
+    if lang == "javascript":
+        js = [n for n in names if n.endswith((".js", ".mjs", ".cjs"))] or ["index.js"]
+        preferred = [n for n in js if n.rsplit("/", 1)[-1] in ("index.js", "server.js", "app.js", "main.js")]
+        return f"node {(preferred or js)[0]}"
+    return {"c": "./a.out", "cpp": "./a.out"}.get(lang, "")

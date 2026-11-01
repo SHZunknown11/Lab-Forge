@@ -16,7 +16,7 @@ def test_required_directories_exist() -> None:
     required_directories = [
         ".agents/rules",
         "apps/api",
-        "apps/web",
+        "apps/frontend",
         "core/ingestion",
         "core/ai",
         "core/execution",

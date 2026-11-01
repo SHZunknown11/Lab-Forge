@@ -1,131 +1,93 @@
 import json
-import sys
-from types import SimpleNamespace
 
+import httpx
 import pytest
-from pathlib import Path
-from core.schemas import ExperimentDocument, ExperimentMetadata, ExperimentLevel
-from core.ai.provider import AIOrchestrator, GeminiProvider, LocalMockProvider
 
-def test_ai_orchestrator_caching(tmp_path):
-    orchestrator = AIOrchestrator(cache_dir=tmp_path)
-    # mock document
-    doc = ExperimentDocument(
-        metadata=ExperimentMetadata(experiment_number="1", title="T", aim="A"),
-        easy=ExperimentLevel(problem_statement="Easy P")
-    )
-    
-    # generate once
-    generated1 = orchestrator.generate(doc)
-    assert generated1.experiment_number == "1"
-    
-    # check cache file exists
-    cache_file = tmp_path / "exp_1_LocalMockProvider_mock-local_cache.json"
-    assert cache_file.exists()
-    
-    # generate again, should use cache (even if we changed the provider mock)
-    orchestrator.provider = LocalMockProvider() # new instance, doesn't matter, it reads from cache
-    generated2 = orchestrator.generate(doc)
-    assert generated1.model_dump() == generated2.model_dump()
+from core.ai.provider import (
+    AIError, DraftCache, OpenAICompatProvider, ProviderChain, RetryableAIError, build_user_prompt,
+)
+from core.schemas import AIReport
+
+REPORT = {
+    "experiment_no": "2.1", "title": "Experiment 2.1", "aim": "Sort numbers.",
+    "tasks": [{"title": "Task", "problem": "Sort.", "objectives": ["Learn sorting"], "language": "python",
+               "files": [{"name": "main.py", "code": "print(sorted([3, 1, 2]))"}], "stdin": ""}],
+    "learning_outcomes": ["Sorting works."],
+}
 
 
-def test_gemini_provider_uses_configured_model_and_json_schema(monkeypatch):
-    calls = []
-
-    class FakeConfig:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-
-    class FakeModels:
-        def generate_content(self, **kwargs):
-            calls.append(kwargs)
-            return SimpleNamespace(text=json.dumps({
-                "experiment_number": "1",
-                "title": "Generated",
-                "global_aim": "Aim",
-                "easy": {
-                    "problem_statement": "Easy", "objectives": "Learn",
-                    "filename": "Easy.java", "code": "public class Easy {}",
-                    "expected_behavior": "Works",
-                },
-                "medium": {
-                    "problem_statement": "Medium", "objectives": "Learn",
-                    "filename": "Medium.java", "code": "public class Medium {}",
-                    "expected_behavior": "Works",
-                },
-                "hard": {
-                    "problem_statement": "Hard", "objectives": "Learn",
-                    "filename": "Hard.java", "code": "public class Hard {}",
-                    "expected_behavior": "Works",
-                },
-                "learning_outcomes": ["Learn"],
-            }))
-
-    class FakeClient:
-        def __init__(self, api_key):
-            assert api_key == "test-key"
-            self.models = FakeModels()
-
-    fake_genai = SimpleNamespace(Client=FakeClient)
-    fake_types = SimpleNamespace(GenerateContentConfig=FakeConfig)
-    fake_errors = SimpleNamespace(APIError=Exception)
-    fake_genai.types = fake_types
-    fake_genai.errors = fake_errors
-    monkeypatch.setitem(sys.modules, "google.genai", fake_genai)
-    monkeypatch.setitem(sys.modules, "google.genai.types", fake_types)
-    monkeypatch.setitem(sys.modules, "google.genai.errors", fake_errors)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setenv("GEMINI_MODEL", "gemini-test-model")
-
-    provider = GeminiProvider()
-    document = ExperimentDocument(
-        metadata=ExperimentMetadata(experiment_number="1", title="T", aim="A"),
-        easy=ExperimentLevel(problem_statement="Easy"),
-    )
-    result = provider.generate_experiment(document)
-
-    assert result.title == "Generated"
-    assert provider.get_metadata()["model"] == "gemini-test-model"
-    assert calls[0]["model"] == "gemini-test-model"
-    assert calls[0]["config"].kwargs["response_mime_type"] == "application/json"
+def test_cache_key_ignores_whitespace_and_case_but_not_language(tmp_path):
+    k1 = DraftCache.key("Aim: Sort\n\n numbers", "python")
+    assert k1 == DraftCache.key("aim: sort numbers", "python")
+    assert k1 != DraftCache.key("aim: sort numbers", "java")
+    cache = DraftCache(tmp_path)
+    assert cache.get(k1) is None
+    cache.put(k1, AIReport.model_validate(REPORT))
+    assert cache.get(k1).aim == "Sort numbers."
 
 
-def test_gemini_provider_retries_with_a_fallback_model(monkeypatch):
-    calls = []
+def test_prompt_contains_only_what_is_needed():
+    prompt = build_user_prompt("Aim: x", language="auto", subject="CC")
+    assert "Subject: CC" in prompt and "Write the programs in" not in prompt
 
-    class RetryableError(Exception):
-        code = 503
 
-    class FakeConfig:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
+def _provider(handler, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    return OpenAICompatProvider("groq", client=httpx.Client(transport=httpx.MockTransport(handler)))
 
-    class FakeModels:
-        def generate_content(self, **kwargs):
-            calls.append(kwargs)
-            if len(calls) == 1:
-                raise RetryableError("temporarily unavailable")
-            return SimpleNamespace(text="{}")
 
-    class FakeClient:
-        def __init__(self, api_key):
-            self.models = FakeModels()
+def test_openai_compatible_provider_parses_json_and_logs_usage(monkeypatch, tmp_path):
+    seen = {}
 
-    fake_genai = SimpleNamespace(Client=FakeClient)
-    fake_types = SimpleNamespace(GenerateContentConfig=FakeConfig)
-    fake_errors = SimpleNamespace(APIError=RetryableError)
-    fake_genai.types = fake_types
-    fake_genai.errors = fake_errors
-    monkeypatch.setitem(sys.modules, "google.genai", fake_genai)
-    monkeypatch.setitem(sys.modules, "google.genai.types", fake_types)
-    monkeypatch.setitem(sys.modules, "google.genai.errors", fake_errors)
-    monkeypatch.setattr("core.ai.provider.time.sleep", lambda _: None)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setenv("GEMINI_MODEL", "primary")
-    monkeypatch.setenv("GEMINI_FALLBACK_MODELS", "fallback")
-    monkeypatch.setenv("GEMINI_MAX_ATTEMPTS", "2")
+    def handler(request: httpx.Request):
+        body = json.loads(request.content)
+        seen["auth"] = request.headers["authorization"]
+        seen["format"] = body.get("response_format")
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": json.dumps(REPORT)}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 900, "completion_tokens": 400},
+        })
 
-    provider = GeminiProvider()
+    report = _provider(handler, monkeypatch).generate("Aim: sort numbers")
+    assert report.tasks[0].files[0].name == "main.py"
+    assert seen["auth"] == "Bearer test-key" and seen["format"] == {"type": "json_object"}
+    log = (tmp_path / "usage.jsonl").read_text().strip().splitlines()
+    assert json.loads(log[-1])["input"] == 900
 
-    assert provider._generate_json("prompt", dict) == {}
-    assert [call["model"] for call in calls] == ["primary", "fallback"]
+
+def test_rate_limited_provider_is_retryable(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    provider = _provider(lambda r: httpx.Response(429, text="slow down"), monkeypatch)
+    with pytest.raises(RetryableAIError):
+        provider.generate("Aim: x")
+
+
+class Fake:
+    def __init__(self, name, result=None, error=None):
+        self.name, self.model, self.configured = name, "m", True
+        self.result, self.error, self.calls = result, error, 0
+
+    def generate(self, *a, **k):
+        self.calls += 1
+        if self.error:
+            raise self.error
+        return self.result
+
+
+def test_chain_falls_through_to_the_next_provider():
+    broken = Fake("a", error=RetryableAIError("quota"))
+    working = Fake("b", result=AIReport.model_validate(REPORT))
+    chain = ProviderChain([broken, working])
+    assert chain.generate("sheet").aim == "Sort numbers."
+    assert broken.calls == working.calls == 1
+
+
+def test_chain_reports_a_plain_message_when_everything_fails():
+    chain = ProviderChain([Fake("a", error=RetryableAIError("x")), Fake("b", error=RetryableAIError("y"))])
+    with pytest.raises(AIError, match="busy or out of free quota"):
+        chain.generate("sheet")
+
+
+def test_unconfigured_chain_explains_itself():
+    with pytest.raises(AIError, match="No AI provider"):
+        ProviderChain([]).generate("sheet")

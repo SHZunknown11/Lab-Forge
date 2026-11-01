@@ -1,14 +1,46 @@
-"""Parse experiment source files (.txt and .md) into structured ExperimentDocument."""
+"""Rule-based parser for sheets in the Easy/Medium/Hard layout.
+
+Used only by the offline provider (AI_MODE=local) so development and tests
+work without an API key. The cloud provider handles any layout.
+"""
 from __future__ import annotations
 
 import re
 from pathlib import Path
-from core.schemas import ExperimentDocument, ExperimentMetadata, ExperimentLevel
+from typing import Optional
+
+from pydantic import BaseModel
+
+
+class ExperimentMetadata(BaseModel):
+    experiment_number: str
+    title: str
+    aim: str = ""
+    co_mapping: str = ""
+
+
+class ExperimentLevel(BaseModel):
+    problem_statement: str = ""
+    objectives: str = ""
+    code: str = ""
+    filename: str = ""
+
+
+class ExperimentDocument(BaseModel):
+    metadata: ExperimentMetadata
+    easy: Optional[ExperimentLevel] = None
+    medium: Optional[ExperimentLevel] = None
+    hard: Optional[ExperimentLevel] = None
+    objectives: str = ""
+    apparatus: str = ""
+    reading_material: str = ""
 
 
 def parse_source_file(source_path: str) -> ExperimentDocument:
-    """Parse a .txt or .md experiment source file into an ExperimentDocument."""
-    text = Path(source_path).read_text(encoding="utf-8", errors="replace")
+    return parse_text(Path(source_path).read_text(encoding="utf-8", errors="replace"))
+
+
+def parse_text(text: str) -> ExperimentDocument:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
 
     metadata = _extract_metadata(text)

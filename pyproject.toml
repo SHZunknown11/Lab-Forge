@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "labforge"
 version = "0.1.0"
-description = "University programming-lab report automation foundation."
+description = "Lab reports from experiment sheets: AI-written, really executed, college-formatted."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

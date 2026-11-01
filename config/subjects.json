@@ -1,8 +1,6 @@
 [
-  {
-    "subject_name": "PBLJ",
-    "subject_code": "24CSH-301",
-    "university": "Chandigarh University",
-    "template_reference": "templates/chandigarh-university/pblj/template.docx"
-  }
+  {"subject_name": "Project Based Learning in Java", "subject_code": "24CSH-301", "university": "Chandigarh University", "template_reference": ""},
+  {"subject_name": "Fundamentals of Image Processing", "subject_code": "24CSH-305", "university": "Chandigarh University", "template_reference": ""},
+  {"subject_name": "Full Stack Development - II", "subject_code": "24CSP-304", "university": "Chandigarh University", "template_reference": ""},
+  {"subject_name": "Competitive Coding - II", "subject_code": "24CSP-305", "university": "Chandigarh University", "template_reference": ""}
 ]

@@ -1,0 +1,34 @@
+services:
+  labforge:
+    build:
+      context: .
+      args:
+        VITE_ADSENSE_CLIENT: ${VITE_ADSENSE_CLIENT:-}
+        VITE_ADSENSE_SLOT_RAIL: ${VITE_ADSENSE_SLOT_RAIL:-}
+        VITE_ADSENSE_SLOT_BENCH: ${VITE_ADSENSE_SLOT_BENCH:-}
+    env_file: .env
+    environment:
+      PDF_BACKEND: gotenberg
+      GOTENBERG_URL: http://gotenberg:3000
+      LABFORGE_TRUST_PROXY: "1"
+    ports:
+      - "8000:8000"
+    volumes:
+      - labforge-data:/app/artifacts
+    # Student programs run inside this container: keep it small and contained.
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 512
+    read_only: false
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    depends_on: [gotenberg]
+
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    restart: unless-stopped
+    # Not published: only LabForge talks to it.
+
+volumes:
+  labforge-data:

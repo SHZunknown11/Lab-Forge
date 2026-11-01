@@ -1,249 +1,297 @@
+"""LabForge HTTP API and static frontend.
+
+No accounts: student details live in the browser. Spend is protected by
+per-IP limits on AI calls (cache hits are free), runs, renders and uploads.
+"""
+from __future__ import annotations
+
+import io
+import json
 import os
-import shutil
-import tempfile
+import threading
+import time
+import uuid
+from collections import defaultdict, deque
 from pathlib import Path
+
 from dotenv import load_dotenv
 
-load_dotenv() # Load environment variables from .env file
+load_dotenv()
 
-from typing import Dict, Any
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from typing import Dict, Any, Optional
-
-from core.pipeline.orchestrator import generate_report
-from core.profiles.manager import ProfileManager
-from apps.api.logger import RequestLogger
-from apps.api.auth import auth_manager, usage_tracker, User
-
-from fastapi.middleware.cors import CORSMiddleware
-
-app = FastAPI(title="LabForge API")
-
-# Allow CORS for local React development
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+from core.ai.provider import AIError, DraftCache, get_provider, usage_summary  # noqa: E402
+from core.documents.pdf_converter import PdfConverter  # noqa: E402
+from core.documents.templates import DEFAULT_FIELDS, TEMPLATES  # noqa: E402
+from core.execution.runner import LANGUAGE_LABELS, CodeRunner  # noqa: E402
+from core.ingestion.extract import UnsupportedFile, condense, extract_text  # noqa: E402
+from core.pipeline.orchestrator import (  # noqa: E402
+    build_draft, job_file, job_path, new_job, purge_old_jobs, render_report, run_task,
 )
+from core.schemas import RenderRequest, Task  # noqa: E402
 
-logger = RequestLogger()
+ROOT = Path(__file__).resolve().parents[2]
+os.chdir(ROOT)  # artifacts/ and templates/ are relative to the project root
 
-# Ensure directories exist
-artifacts_dir = Path("artifacts")
-artifacts_dir.mkdir(exist_ok=True)
-web_dir = Path("apps/web")
-web_dir.mkdir(exist_ok=True, parents=True)
+MAX_UPLOAD = int(os.environ.get("LABFORGE_MAX_UPLOAD_MB", "8")) * 1024 * 1024
+MAX_IMAGE = 6 * 1024 * 1024
+JOB_TTL_HOURS = float(os.environ.get("LABFORGE_JOB_TTL_HOURS", "24"))
+AI_DAILY = int(os.environ.get("LABFORGE_AI_DAILY_LIMIT", "10"))
+TRUST_PROXY = os.environ.get("LABFORGE_TRUST_PROXY", "0") == "1"
+DIST = ROOT / "apps" / "frontend" / "dist"
 
-class GenerateResponse(BaseModel):
-    manifest: Dict[str, Any]
-    docx_url: str
-    pdf_url: str | None = None
-    remaining_generations: int = -1
+app = FastAPI(title="LabForge", docs_url=None, redoc_url=None)
+runner = CodeRunner()
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
 
-class SignupRequest(BaseModel):
-    username: str
-    password: str
-    student_name: str
-    uid: str
-    batch: str
+# ── limits ─────────────────────────────────────────────────────────
 
-@app.post("/api/signup")
-def signup(request: SignupRequest):
-    try:
-        user = auth_manager.register_user(
-            username=request.username,
-            password=request.password,
-            student_name=request.student_name,
-            uid=request.uid,
-            batch=request.batch
-        )
-        return {"message": "User created successfully", "username": user.username}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+class Limiter:
+    def __init__(self):
+        self._hits: dict[tuple[str, str], deque] = defaultdict(deque)
+        self._lock = threading.Lock()
 
-@app.post("/api/login")
-def login(request: LoginRequest):
-    user = auth_manager.authenticate_user(request.username, request.password)
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-    
-    token = auth_manager.create_access_token({"sub": user.username, "role": user.role})
-    remaining = -1
-    if user.role != "admin":
-        usage = usage_tracker.get_usage(user.username)
-        remaining = max(0, 3 - usage)
-        
+    def check(self, ip: str, bucket: str, limit: int, window: int, consume: bool = True) -> int:
+        """Returns the remaining allowance; raises 429 when it's used up."""
+        now = time.time()
+        with self._lock:
+            q = self._hits[(ip, bucket)]
+            while q and q[0] < now - window:
+                q.popleft()
+            if len(q) >= limit:
+                wait = int(q[0] + window - now) + 1
+                raise HTTPException(429, _limit_message(bucket, wait))
+            if consume:
+                q.append(now)
+            return limit - len(q)
+
+    def remaining(self, ip: str, bucket: str, limit: int, window: int) -> int:
+        now = time.time()
+        with self._lock:
+            q = self._hits[(ip, bucket)]
+            return max(0, limit - sum(1 for t in q if t >= now - window))
+
+
+def _limit_message(bucket: str, wait: int) -> str:
+    when = f"{wait // 3600 + 1} hours" if wait > 3600 else f"{wait // 60 + 1} minutes"
+    if bucket == "ai":
+        return f"You've used today's {AI_DAILY} new sheets. Sheets someone already uploaded still work. More in {when}."
+    return f"Too many requests. Try again in {when}."
+
+
+limiter = Limiter()
+
+
+def client_ip(request: Request) -> str:
+    if TRUST_PROXY:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    removed = purge_old_jobs(JOB_TTL_HOURS)
+    if removed:
+        print(f"[jobs] removed {removed} expired job folders")
+
+
+_last_purge = [time.time()]
+
+
+def _maybe_purge() -> None:
+    if time.time() - _last_purge[0] > 3600:
+        _last_purge[0] = time.time()
+        threading.Thread(target=purge_old_jobs, args=(JOB_TTL_HOURS,), daemon=True).start()
+
+
+def _job(job_id: str) -> Path:
+    path = job_path(job_id)
+    if path is None:
+        raise HTTPException(404, "This report has expired. Upload the sheet again to start over.")
+    return path
+
+
+# ── endpoints ──────────────────────────────────────────────────────
+
+@app.get("/api/meta")
+def meta(request: Request):
+    provider = get_provider()
+    caps = runner.available()
     return {
-        "access_token": token,
-        "token_type": "bearer",
-        "username": user.username,
-        "role": user.role,
-        "remaining_generations": remaining
+        "templates": [
+            {"id": t.id, "name": t.name, "description": t.description, "header_image": t.header_image}
+            for t in TEMPLATES.values()
+        ],
+        "default_fields": DEFAULT_FIELDS,
+        "languages": [{"id": k, "label": v, "runnable": caps.get(k, False)} for k, v in LANGUAGE_LABELS.items()],
+        "pdf": PdfConverter().available(),
+        "ai_ready": provider.configured,
+        "limits": {"daily": AI_DAILY, "remaining": limiter.remaining(client_ip(request), "ai", AI_DAILY, 86400)},
+        "job_ttl_hours": JOB_TTL_HOURS,
     }
 
-@app.get("/api/profiles")
-def get_profiles(current_user: User = Depends(auth_manager.get_current_user)):
-    profile_mgr = ProfileManager()
-    global_student = profile_mgr.get_student_profile()
-    
-    # Merge global profile with user-specific profile if available
-    student_dict = global_student.model_dump() if global_student else {}
-    if current_user.student_name:
-        student_dict["student_name"] = current_user.student_name
-    if current_user.uid:
-        student_dict["uid"] = current_user.uid
-    if current_user.batch:
-        student_dict["section_group"] = current_user.batch
-        
-    # If no data exists at all, set to None so frontend knows
-    if not student_dict:
-        student_dict = None
 
-    subjects = profile_mgr.list_subjects()
-    
-    remaining = -1
-    if current_user.role != "admin":
-        usage = usage_tracker.get_usage(current_user.username)
-        remaining = max(0, 3 - usage)
-        
-    return {
-        "student": student_dict,
-        "subjects": [s.model_dump() for s in subjects],
-        "user": {
-            "username": current_user.username,
-            "role": current_user.role,
-            "remaining_generations": remaining
-        }
-    }
-
-@app.post("/api/generate", response_model=GenerateResponse)
-async def api_generate(
-    file: UploadFile = File(...),
-    subject_code: str = Form(...),
-    force_refresh: bool = Form(False),
-    student_name: str | None = Form(None),
-    uid: str | None = Form(None),
-    batch: str | None = Form(None),
-    custom_subject_code: str | None = Form(None),
-    custom_subject_name: str | None = Form(None),
-    x_user_id: str | None = Header(None),
-    current_user: User = Depends(auth_manager.get_current_user)
+@app.post("/api/drafts")
+async def create_draft(
+    request: Request,
+    file: UploadFile | None = File(None),
+    text: str = Form(""),
+    language: str = Form("auto"),
+    subject: str = Form(""),
+    fresh: bool = Form(False),
+    from_job: str = Form(""),
 ):
-    if current_user.role != "admin":
-        usage = usage_tracker.get_usage(current_user.username)
-        if usage >= 3:
-            raise HTTPException(status_code=403, detail="Daily generation limit (3) exceeded for your account.")
-    try:
-        # Save uploaded file to a temporary location
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".md", mode="wb") as temp_file:
-            shutil.copyfileobj(file.file, temp_file)
-            temp_path = temp_file.name
-
-        # Construct student override if provided
-        student_override = None
-        profile_mgr = ProfileManager()
-        
-        if student_name or uid or batch:
-            base_student = profile_mgr.get_student_profile()
-            from core.schemas import StudentProfile
-            student_override = StudentProfile(
-                student_name=student_name if student_name is not None else (base_student.student_name if base_student else "Unknown"),
-                uid=uid if uid is not None else (base_student.uid if base_student else "Unknown"),
-                section_group=batch if batch is not None else (base_student.section_group if base_student else "Unknown"),
-                branch=base_student.branch if base_student else "Unknown",
-                semester=base_student.semester if base_student else "Unknown",
-                university=base_student.university if base_student else "Unknown"
-            )
-
-        # Construct subject override if provided
-        subject_override = None
-        if custom_subject_code or custom_subject_name:
-            base_subject = profile_mgr.get_subject(subject_code)
-            if base_subject:
-                from core.schemas import SubjectProfile
-                subject_override = SubjectProfile(
-                    subject_code=custom_subject_code if custom_subject_code is not None else base_subject.subject_code,
-                    subject_name=custom_subject_name if custom_subject_name is not None else base_subject.subject_name,
-                    university=base_subject.university,
-                    template_reference=base_subject.template_reference
-                )
-
-        # Run the orchestrator
-        manifest = generate_report(
-            temp_path, 
-            subject_code, 
-            force_refresh, 
-            student_override=student_override,
-            subject_override=subject_override
-        )
-        
-        # Clean up temp file
-        os.remove(temp_path)
-
-        # Construct URLs for the generated files
-        # manifest paths look like "artifacts/exp_3/Experiment_3_Report.docx"
+    _maybe_purge()
+    ip = client_ip(request)
+    limiter.check(ip, "drafts", 30, 3600)
+    raw = ""
+    previous = job_path(from_job) if from_job else None
+    if previous is not None and (previous / "sheet.txt").is_file():
+        raw = (previous / "sheet.txt").read_text(encoding="utf-8")
+    elif from_job:
+        raise HTTPException(404, "This report expired on the server. Upload the sheet again to start over.")
+    if file is not None and file.filename:
+        data = await file.read(MAX_UPLOAD + 1)
+        if len(data) > MAX_UPLOAD:
+            raise HTTPException(413, f"That file is over {MAX_UPLOAD // (1024 * 1024)} MB. Upload only the experiment sheet.")
         try:
-            docx_rel = Path(manifest.docx_path).relative_to("artifacts").as_posix()
-            docx_url = f"/api/artifacts/{docx_rel}"
-        except ValueError:
-            docx_url = f"/api/artifacts/{Path(manifest.docx_path).name}"
+            raw = extract_text(data, file.filename)
+        except UnsupportedFile as exc:
+            raise HTTPException(415, str(exc)) from exc
+    if text.strip():
+        raw = (raw + "\n\n" + text).strip() if raw else text
+    sheet = condense(raw)
+    if len(sheet) < 30:
+        raise HTTPException(422, "There isn't enough text in that sheet. Paste the experiment text instead.")
 
-        pdf_url = None
-        if manifest.pdf_path:
-            try:
-                pdf_rel = Path(manifest.pdf_path).relative_to("artifacts").as_posix()
-                pdf_url = f"/api/artifacts/{pdf_rel}"
-            except ValueError:
-                pdf_url = f"/api/artifacts/{Path(manifest.pdf_path).name}"
+    language = (language or "auto").lower()
+    language = language if language in LANGUAGE_LABELS or language == "auto" else "auto"
+    subject = subject.strip()[:120]
+    cache = DraftCache()
+    hit = not fresh and cache.get(DraftCache.key(sheet, language, subject)) is not None
+    if not hit:
+        limiter.check(ip, "ai", AI_DAILY, 86400)
 
-        if x_user_id:
-            logger.log_request(
-                user_id=x_user_id,
-                endpoint="/api/generate",
-                status="SUCCESS",
-                request_data={"subject_code": subject_code, "force_refresh": force_refresh}
-            )
-            
-        remaining = -1
-        if current_user.role != "admin":
-            usage_tracker.increment_usage(current_user.username)
-            usage = usage_tracker.get_usage(current_user.username)
-            remaining = max(0, 3 - usage)
+    job_id, job_dir = new_job()
+    (job_dir / "sheet.txt").write_text(sheet, encoding="utf-8")
 
-        return GenerateResponse(
-            manifest=manifest.model_dump(),
-            docx_url=docx_url,
-            pdf_url=pdf_url,
-            remaining_generations=remaining
-        )
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        if x_user_id:
-            logger.log_request(
-                user_id=x_user_id,
-                endpoint="/api/generate",
-                status="ERROR",
-                error_message=str(e),
-                request_data={"subject_code": subject_code, "force_refresh": force_refresh}
-            )
-        raise HTTPException(status_code=500, detail=str(e))
+    def stream():
+        yield json.dumps({"type": "job", "job": job_id}) + "\n"
+        try:
+            for event in build_draft(sheet, job_dir, language, subject, fresh, cache=cache, runner=runner):
+                yield json.dumps(event) + "\n"
+        except AIError as exc:
+            yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
+        except Exception as exc:  # noqa: BLE001
+            print(f"[draft] {type(exc).__name__}: {exc}")
+            yield json.dumps({"type": "error", "message": "Something went wrong while writing. Try again."}) + "\n"
 
-@app.get("/api/logs/{user_id}")
-def get_user_logs(user_id: str):
-    return logger.get_logs(user_id)
+    return StreamingResponse(stream(), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
-# Mount artifacts directory for downloading reports
-app.mount("/api/artifacts", StaticFiles(directory="artifacts"), name="artifacts")
 
-# Mount frontend
-app.mount("/", StaticFiles(directory="apps/web", html=True), name="web")
+class RunRequest(BaseModel):
+    index: int
+    task: Task
+
+
+@app.post("/api/jobs/{job_id}/run")
+def run_one(job_id: str, body: RunRequest, request: Request):
+    job_dir = _job(job_id)
+    limiter.check(client_ip(request), "runs", 60, 3600)
+    task = body.task
+    run_task(job_dir, max(0, min(body.index, 50)), task, runner)
+    return task
+
+
+@app.post("/api/jobs/{job_id}/images")
+async def upload_image(job_id: str, request: Request, file: UploadFile = File(...)):
+    job_dir = _job(job_id)
+    limiter.check(client_ip(request), "uploads", 80, 3600)
+    data = await file.read(MAX_IMAGE + 1)
+    if len(data) > MAX_IMAGE:
+        raise HTTPException(413, "Screenshots must be under 6 MB.")
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            img.load()
+            if img.width * img.height > 40_000_000:
+                raise HTTPException(413, "That image is too large.")
+            clean = img.convert("RGB")  # re-encode: drops metadata and anything that isn't pixels
+    except (UnidentifiedImageError, OSError) as exc:
+        raise HTTPException(415, "That file isn't an image. Upload a PNG or JPG screenshot.") from exc
+    name = f"up_{uuid.uuid4().hex[:12]}.png"
+    clean.save(job_dir / name, optimize=True)
+    return {"name": name, "width": clean.width, "height": clean.height}
+
+
+@app.post("/api/jobs/{job_id}/render")
+def render(job_id: str, body: RenderRequest, request: Request):
+    job_dir = _job(job_id)
+    limiter.check(client_ip(request), "renders", 60, 3600)
+    if body.template not in TEMPLATES:
+        body.template = "cu-cse"
+    return render_report(job_dir, body)
+
+
+@app.get("/api/jobs/{job_id}/files/{name}")
+def get_file(job_id: str, name: str):
+    return _send(job_file(job_id, name))
+
+
+@app.get("/api/jobs/{job_id}/files/{render_id}/{name}")
+def get_render_file(job_id: str, render_id: str, name: str):
+    return _send(job_file(job_id, name, render_id), download=name.endswith((".docx", ".pdf")))
+
+
+def _send(path: Path | None, download: bool = False):
+    if path is None:
+        raise HTTPException(404, "File not found. It may have expired.")
+    headers = {"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"}
+    if download:
+        return FileResponse(path, filename=path.name, headers=headers)
+    return FileResponse(path, headers=headers)
+
+
+@app.get("/api/admin/usage")
+def admin_usage(token: str = "", days: int = 1):
+    expected = os.environ.get("LABFORGE_ADMIN_TOKEN", "")
+    if not expected or token != expected:
+        raise HTTPException(404)
+    return {"days": days, "by_model": usage_summary(days)}
+
+
+@app.exception_handler(HTTPException)
+async def _http_error(request: Request, exc: HTTPException):
+    return JSONResponse({"detail": exc.detail or "Not found."}, status_code=exc.status_code)
+
+
+# ── frontend ───────────────────────────────────────────────────────
+
+class SPAStatic(StaticFiles):
+    async def get_response(self, path, scope):
+        from starlette.exceptions import HTTPException as StarletteHTTPException
+
+        try:
+            response = await super().get_response(path, scope)
+        except StarletteHTTPException:
+            response = None
+        if response is None or response.status_code == 404:
+            if scope["path"].startswith("/api/"):  # unknown API URL: a real 404, not the app page
+                return JSONResponse({"detail": "Not found."}, status_code=404)
+            return await super().get_response("index.html", scope)
+        return response
+
+
+if DIST.exists():
+    app.mount("/", SPAStatic(directory=DIST, html=True), name="web")
+else:
+    @app.get("/")
+    def _no_build():
+        return JSONResponse({"detail": "Frontend not built. Run: cd apps/frontend && npm install && npm run build"})
