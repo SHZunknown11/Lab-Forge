@@ -133,6 +133,8 @@ export default function App() {
     if (!fresh) setJob(null)
     setView("preview")
     let jobId = ""
+    let cached = false
+    let failed = false
     try {
       await createDraft(
         form,
@@ -145,17 +147,27 @@ export default function App() {
             setJob({ id: jobId, draft: e.draft, savedAt: Date.now(), cached: false })
           } else if (e.type === "task") setProgress((p) => ({ ...p, tasks: { ...p.tasks, [e.index]: e.status } }))
           else if (e.type === "done") {
+            cached = e.cached
             setProgress((p) => ({ ...p, tasks: {} }))
             setJob({ id: jobId, draft: e.draft, savedAt: Date.now(), cached: e.cached })
-          } else if (e.type === "error") setError(e.message)
+          } else if (e.type === "error") {
+            failed = true
+            setError(e.message)
+          }
         },
         ctl.signal,
       )
+      if (failed) {
+        setView("edit") // the message is in the sidebar
+        return
+      }
       if (subject) {
         const code = value("subject code")
         setRecent((r) => [{ name: subject, code }, ...r.filter((s) => s.name !== subject)].slice(0, 8))
       }
-      setMeta((m) => (m ? { ...m, limits: { ...m.limits, remaining: Math.max(0, m.limits.remaining - 1) } } : m))
+      if (!cached) {
+        setMeta((m) => (m ? { ...m, limits: { ...m.limits, remaining: Math.max(0, m.limits.remaining - 1) } } : m))
+      }
     } catch (e) {
       if ((e as Error).name !== "AbortError") setError((e as Error).message)
       setView("edit")
