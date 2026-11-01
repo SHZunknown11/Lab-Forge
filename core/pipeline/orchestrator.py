@@ -95,7 +95,9 @@ def build_draft(
     cache = cache or DraftCache()
     runner = runner or CodeRunner()
 
-    key = DraftCache.key(sheet, language, subject)
+    offline = getattr(provider, "name", "") == "local"
+    # Offline drafts get their own cache entries so they never stand in for real ones.
+    key = DraftCache.key(sheet, language, subject + ("|offline" if offline else ""))
     report = None if fresh else cache.get(key)
     cached = report is not None
     if cached:

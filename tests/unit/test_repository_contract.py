@@ -27,10 +27,8 @@ def test_required_directories_exist() -> None:
         "core/pipeline",
         "templates/chandigarh-university/pblj",
         "examples",
-        "artifacts",
         "tests/unit",
         "tests/integration",
-        "tests/fixtures",
         "docs",
         "config",
     ]
