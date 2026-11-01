@@ -5,9 +5,11 @@ per-IP limits on AI calls (cache hits are free), runs, renders and uploads.
 """
 from __future__ import annotations
 
+import hmac
 import io
 import json
 import os
+import sys
 import threading
 import time
 import uuid
@@ -18,6 +20,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _protect_secrets() -> None:
+    """Student programs run as the same user. Marking this process non-dumpable makes
+    /proc/<pid>/environ and /proc/<pid>/mem root-only, so they can't read the API keys."""
+    if sys.platform.startswith("linux"):
+        try:
+            import ctypes
+
+            ctypes.CDLL(None, use_errno=True).prctl(4, 0, 0, 0, 0)  # PR_SET_DUMPABLE, 0
+        except (OSError, AttributeError):
+            pass
+
+
+_protect_secrets()
+
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
@@ -26,7 +43,7 @@ from pydantic import BaseModel  # noqa: E402
 from core.ai.provider import AIError, DraftCache, get_provider, usage_summary  # noqa: E402
 from core.documents.pdf_converter import PdfConverter  # noqa: E402
 from core.documents.templates import DEFAULT_FIELDS, TEMPLATES  # noqa: E402
-from core.execution.runner import LANGUAGE_LABELS, CodeRunner  # noqa: E402
+from core.execution.runner import LANGUAGE_LABELS, CodeRunner, sandbox_report  # noqa: E402
 from core.ingestion.extract import UnsupportedFile, condense, extract_text  # noqa: E402
 from core.pipeline.orchestrator import (  # noqa: E402
     build_draft, job_file, job_path, new_job, purge_old_jobs, render_report, run_task,
@@ -40,7 +57,8 @@ MAX_UPLOAD = int(os.environ.get("LABFORGE_MAX_UPLOAD_MB", "8")) * 1024 * 1024
 MAX_IMAGE = 6 * 1024 * 1024
 JOB_TTL_HOURS = float(os.environ.get("LABFORGE_JOB_TTL_HOURS", "24"))
 AI_DAILY = int(os.environ.get("LABFORGE_AI_DAILY_LIMIT", "10"))
-TRUST_PROXY = os.environ.get("LABFORGE_TRUST_PROXY", "0") == "1"
+# Number of reverse proxies in front of the app that append to X-Forwarded-For (0 = none).
+TRUST_PROXY = int(os.environ.get("LABFORGE_TRUST_PROXY", "0") or 0)
 DIST = ROOT / "apps" / "frontend" / "dist"
 
 app = FastAPI(title="LabForge", docs_url=None, redoc_url=None)
@@ -87,9 +105,10 @@ limiter = Limiter()
 
 def client_ip(request: Request) -> str:
     if TRUST_PROXY:
-        forwarded = request.headers.get("x-forwarded-for", "")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
+        # Visitors can send their own X-Forwarded-For; only the entries our proxies append count.
+        hops = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]
+        if hops:
+            return hops[-min(TRUST_PROXY, len(hops))]
     return request.client.host if request.client else "unknown"
 
 
@@ -259,12 +278,42 @@ def _send(path: Path | None, download: bool = False):
     return FileResponse(path, headers=headers)
 
 
+@app.get("/api/health")
+def health():
+    return {"ok": True}
+
+
+def _admin(token: str) -> None:
+    expected = os.environ.get("LABFORGE_ADMIN_TOKEN", "")
+    if not expected or not hmac.compare_digest(token.encode(), expected.encode()):
+        raise HTTPException(404)
+
+
 @app.get("/api/admin/usage")
 def admin_usage(token: str = "", days: int = 1):
-    expected = os.environ.get("LABFORGE_ADMIN_TOKEN", "")
-    if not expected or token != expected:
-        raise HTTPException(404)
+    _admin(token)
     return {"days": days, "by_model": usage_summary(days)}
+
+
+@app.get("/api/admin/status")
+def admin_status(request: Request, token: str = ""):
+    _admin(token)
+    return {
+        "providers": get_provider().describe(),
+        "runtimes": runner.available(),
+        "sandbox": sandbox_report(),
+        "pdf": PdfConverter().available(),
+        "client_ip": client_ip(request),
+        "forwarded_for": request.headers.get("x-forwarded-for", ""),
+    }
+
+
+@app.middleware("http")
+async def _headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    return response
 
 
 @app.exception_handler(HTTPException)

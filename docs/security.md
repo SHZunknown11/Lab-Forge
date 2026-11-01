@@ -17,7 +17,26 @@ every program as untrusted.
 - **Uploads are re-encoded** to PNG with Pillow; anything that isn't an image is refused.
 - **Unguessable job ids** (UUID4) and strict file-name patterns on download routes.
 - **Per-IP limits** on new sheets, runs, renders and uploads.
-- **Jobs expire** after `LABFORGE_JOB_TTL_HOURS`.
+- **Jobs expire** after `LABFORGE_JOB_TTL_HOURS` (6 hours in the image).
+- **Server keys stay private** from programs on Linux: the API process is
+  non-dumpable, so `/proc/<pid>/environ` and `/proc/<pid>/mem` are root-only.
+- **No internet for programs** (`EXEC_ALLOW_NETWORK=0` in the image): a
+  network namespace when the host allows it, loopback-only guards otherwise.
+- **Process limits** on Linux: process-group kill on timeout, `prlimit` on
+  CPU time, file size and core dumps, and a global cap on parallel runs.
+- **Read-only app code** in the image; only `artifacts/` is writable.
+- **Spoof-resistant visitor IPs**: with `LABFORGE_TRUST_PROXY=<hops>` only the
+  addresses your own proxies appended to `X-Forwarded-For` count.
+
+## Known limits on single-container hosts
+
+On hosts without nested containers (Hugging Face Spaces, Render, Koyeb),
+programs run as the app user inside the one container. The loopback guards
+in the launchers stop ordinary programs, but a deliberately hostile program
+(raw syscalls, C) could still reach the network when the host forbids network
+namespaces, and could read other visitors' job folders for up to
+`LABFORGE_JOB_TTL_HOURS`. Keep the TTL short there, or use a host with Docker
+and `EXEC_BACKEND=docker` for a hard boundary.
 
 ## Required for a public deployment
 

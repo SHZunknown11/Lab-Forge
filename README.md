@@ -75,13 +75,24 @@ sheet ─► extract text ─► condense (drop tutorial text, links, boilerplat
 Everything is in [`.env.example`](.env.example). Free keys:
 [Gemini](https://aistudio.google.com/apikey), [Groq](https://console.groq.com/keys),
 [Cerebras](https://cloud.cerebras.ai), [OpenRouter](https://openrouter.ai/keys),
-[Mistral](https://console.mistral.ai), GitHub Models. Set any of them; the
-order in `AI_PROVIDERS` is the failover order.
+[Mistral](https://console.mistral.ai), GitHub Models, and Cloudflare Workers AI
+through a small proxy Worker on your own account
+([deploy/cloudflare-ai](deploy/cloudflare-ai/README.md), no extra signup if you
+use Cloudflare). Set any of them; the order in `AI_PROVIDERS` is the failover order.
 
 ## Deploy and monetise
 
-See [docs/deployment.md](docs/deployment.md): Docker Compose with Gotenberg,
-sandboxing student code, watching token spend, and switching on AdSense.
+Free hosting on a Hugging Face Space (2 vCPU, 16 GB RAM):
+
+```powershell
+# HF_TOKEN=<write token> in .env, then:
+.venv\Scripts\python scripts\deploy_hf.py
+```
+
+It creates the Space, copies your AI keys into Space secrets, uploads the
+source, waits for the build and runs `scripts/smoke_test.py` against the live
+site. The same `Dockerfile` runs on Render, Koyeb, Fly or any VPS. See
+[docs/deployment.md](docs/deployment.md) for sandboxing, token spend and AdSense.
 
 ## Tests
 
@@ -90,6 +101,9 @@ sandboxing student code, watching token spend, and switching on AdSense.
 ```
 
 The suite runs offline (`AI_MODE=local`) and needs a JDK for the Java and API tests.
+`python scripts/smoke_test.py <url>` checks a running server end to end: every
+runtime, Word and PDF. CI runs both, builds the production image and smoke-tests
+it on every push.
 
 ## Use it honestly
 

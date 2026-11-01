@@ -91,3 +91,25 @@ def test_chain_reports_a_plain_message_when_everything_fails():
 def test_unconfigured_chain_explains_itself():
     with pytest.raises(AIError, match="No AI provider"):
         ProviderChain([]).generate("sheet")
+
+
+def test_cloudflare_provider_needs_both_key_and_url(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_AI_KEY", "k")
+    monkeypatch.delenv("CLOUDFLARE_BASE_URL", raising=False)
+    assert not OpenAICompatProvider("cloudflare").configured
+    monkeypatch.setenv("CLOUDFLARE_BASE_URL", "https://labforge-ai.example.workers.dev/v1/")
+    p = OpenAICompatProvider("cloudflare")
+    assert p.configured and p.base == "https://labforge-ai.example.workers.dev/v1"
+
+
+def test_gpt_oss_gets_low_reasoning_effort(monkeypatch):
+    sent = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.update(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(REPORT)}}], "usage": {}})
+
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    monkeypatch.setattr("core.ai.provider.log_usage", lambda *a, **k: {})
+    OpenAICompatProvider("groq", client=httpx.Client(transport=httpx.MockTransport(handler))).generate("Aim: x")
+    assert sent["reasoning_effort"] == "low" and sent["model"] == "openai/gpt-oss-120b"

@@ -1,0 +1,15 @@
+name = "labforge-ai"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[ai]
+binding = "AI"
+
+[vars]
+DEFAULT_MODEL = "@cf/openai/gpt-oss-120b"
+
+[observability]
+enabled = true
+
+# KEY_SHA256 is a secret: npx wrangler secret put KEY_SHA256

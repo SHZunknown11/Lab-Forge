@@ -29,6 +29,9 @@ server = [
   "uvicorn[standard]>=0.30,<1.0",
   "python-multipart>=0.0.9,<1.0",
 ]
+deploy = [
+  "huggingface_hub>=0.30",
+]
 
 [project.scripts]
 labforge = "main:main"
@@ -43,3 +46,8 @@ pythonpath = ["."]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = ["scratch", "Test_report", ".runtime"]
+
+[tool.ruff.lint]
+# Pinned so newer ruff releases (which widen the defaults) don't change what CI checks.
+select = ["E4", "E7", "E9", "F", "W6"]

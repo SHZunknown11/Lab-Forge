@@ -1,6 +1,24 @@
 # Deploying LabForge
 
-## One machine with Docker (simplest)
+## Hugging Face Spaces (free)
+
+A Docker Space gives 2 vCPU and 16 GB RAM for free; the container sleeps
+after two days without visitors and wakes on the next visit (about a minute).
+
+1. Create a write token at https://huggingface.co/settings/tokens and add
+   `HF_TOKEN=...` to `.env`.
+2. `pip install huggingface_hub`, then `python scripts/deploy_hf.py`.
+
+The script creates `<you>/labforge`, stores the AI keys from `.env` as Space
+secrets (non-secret settings as variables), uploads only git-tracked source
+files, waits for the build and smoke-tests `https://<you>-labforge.hf.space`.
+Run it again to deploy a new version. Job folders and the draft cache live on
+the container's disk, so a restart clears them.
+
+AdSense needs a domain you own: put one in front of the Space (Cloudflare
+proxy or a redirect) or move to a host with custom domains.
+
+## One machine with Docker
 
 ```bash
 cp .env.example .env          # add at least one AI key
@@ -19,8 +37,17 @@ Data lives in the `labforge-data` volume: job folders (deleted after
 Uploaded sheets decide what code the model writes, so treat every program as
 untrusted. Layers already in place:
 
-- Programs get a scrubbed environment: no API keys or other secrets.
-- Wall-clock timeouts on every compile, run and build.
+- Programs get a scrubbed environment: no API keys or other secrets. The
+  server process marks itself non-dumpable on Linux, so a program running as
+  the same user can't read its keys from `/proc/<pid>/environ` either.
+- Wall-clock timeouts on every compile, run and build. On Linux each run is
+  its own process group, killed as a whole, with `prlimit` caps on CPU time,
+  file size and core dumps; `LABFORGE_MAX_PARALLEL_RUNS` caps concurrency.
+- `EXEC_ALLOW_NETWORK=0` (the image default): programs only reach loopback.
+  If the kernel allows unprivileged namespaces, each run gets a private
+  network namespace; otherwise the Python, Node and Java launchers refuse
+  non-loopback connections. `GET /api/admin/status?token=...` shows which.
+- The image's app code is owned by root and read-only to the app user.
 - Screenshotted pages can only reach LabForge's own throwaway static server
   (outbound requests go to a dead proxy). Keep `HTML_ALLOW_NETWORK=0`.
 - Uploaded screenshots are re-encoded as PNG.

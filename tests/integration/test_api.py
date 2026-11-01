@@ -82,3 +82,21 @@ def test_screenshot_upload_must_be_an_image(client):
 def test_empty_sheet_is_refused(client):
     res = client.post("/api/drafts", data={"text": "hi"})
     assert res.status_code == 422
+
+
+def test_client_ip_ignores_spoofed_forwarded_for(monkeypatch):
+    from apps.api import main
+
+    class Req:
+        headers = {"x-forwarded-for": "6.6.6.6, 203.0.113.9"}
+        client = type("C", (), {"host": "10.0.0.1"})()
+
+    monkeypatch.setattr(main, "TRUST_PROXY", 0)
+    assert main.client_ip(Req()) == "10.0.0.1"
+    monkeypatch.setattr(main, "TRUST_PROXY", 1)
+    assert main.client_ip(Req()) == "203.0.113.9"  # the hop our proxy added, not the visitor's claim
+
+
+def test_health_and_hidden_admin(client):
+    assert client.get("/api/health").json() == {"ok": True}
+    assert client.get("/api/admin/status?token=x").status_code == 404

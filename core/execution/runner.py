@@ -9,6 +9,12 @@ Backends
   EXEC_BACKEND=local   subprocess in a temp folder with a scrubbed environment (development)
   EXEC_BACKEND=docker  throwaway container per run: no network, CPU/memory/pid limits
                        (use for any public deployment; see docs/deployment.md)
+
+EXEC_ALLOW_NETWORK=0 keeps programs off the internet: in a private network
+namespace when the kernel allows it (unshare), otherwise through loopback-only
+guards in the Python, Node and Java launchers. On Linux every run gets its own
+process group (killed as a whole on timeout), CPU/file-size limits, and at
+most LABFORGE_MAX_PARALLEL_RUNS programs run at once.
 """
 from __future__ import annotations
 
@@ -31,6 +37,39 @@ ROOT = Path(__file__).resolve().parents[2]
 HARNESS = Path(__file__).parent / "harness"
 NODE_RUNTIME = Path(os.environ.get("EXEC_NODE_MODULES", ROOT / ".runtime" / "node" / "node_modules"))
 MAX_OUTPUT_CHARS = 20_000
+POSIX = os.name != "nt"
+_SLOTS = threading.BoundedSemaphore(max(1, int(os.environ.get("LABFORGE_MAX_PARALLEL_RUNS", "3"))))
+
+
+def network_allowed() -> bool:
+    return os.environ.get("EXEC_ALLOW_NETWORK", "1") == "1"
+
+
+@functools.cache
+def _netns_prefix() -> tuple[str, ...]:
+    """`unshare -rn` puts a program in its own network namespace with only loopback.
+
+    Needs unprivileged user namespaces; many container hosts forbid them, so probe once.
+    """
+    if not POSIX or network_allowed():
+        return ()
+    unshare, ip = shutil.which("unshare"), shutil.which("ip")
+    if not unshare or not ip:
+        return ()
+    prefix = (unshare, "-rn", "sh", "-c", f'{ip} link set lo up && exec "$@"', "sh")
+    try:
+        ok = subprocess.run([*prefix, "true"], capture_output=True, timeout=5).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        ok = False
+    return prefix if ok else ()
+
+
+def sandbox_report() -> dict:
+    return {
+        "network": "allowed" if network_allowed() else ("namespace" if _netns_prefix() else "guarded"),
+        "limits": bool(POSIX and shutil.which("prlimit")),
+        "parallel": _SLOTS._initial_value,  # type: ignore[attr-defined]
+    }
 
 LANGUAGE_LABELS = {
     "java": "Java", "python": "Python", "c": "C", "cpp": "C++", "javascript": "Node.js",
@@ -187,7 +226,10 @@ class CodeRunner:
                     "Add a screenshot of the output from your machine."))
             return RunResult(status="failed", output=_clip(comp.output), retryable=True,
                              note="The program didn't compile.")
-        run = self._exec(["java", "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
+        no_net = [] if network_allowed() else [
+            f"-D{k}=127.0.0.1" for k in ("http.proxyHost", "https.proxyHost", "socksProxyHost")
+        ] + [f"-D{k}=9" for k in ("http.proxyPort", "https.proxyPort", "socksProxyPort")]
+        run = self._exec(["java", *no_net, "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
                           "-Xss8m", "-cp", ".", "LFLauncher", entry], wd, stdin, "java")
         if "HeadlessException" in run.output:
             return RunResult(status="not_run", note="This program opens a window. Add a screenshot of it.")
@@ -199,6 +241,7 @@ class CodeRunner:
         entry = _pick(paths, ("main.py", "app.py"), lambda p: "__main__" in (wd / p).read_text(encoding="utf-8"))
         shutil.copy(HARNESS / "lf_python.py", wd / "lf_python.py")
         flags = {
+            "LF_NO_NET": "0" if network_allowed() else "1",
             "LF_MPL": "1" if "matplotlib" in code else "0",
             "LF_CV2": "1" if "cv2" in code else "0",
             "LF_PIL": "1" if re.search(r"\bfrom PIL\b|\bimport PIL\b", code) else "0",
@@ -239,8 +282,12 @@ class CodeRunner:
             shutil.copy(HARNESS / "lf_mongo.cjs", wd / "lf_mongo.cjs")
             cmd = ["node", "lf_mongo.cjs", entry]
             timeout += 25
-        run = self._exec(cmd, wd, stdin, "javascript", timeout=timeout,
-                         extra_env={"NODE_PATH": str(NODE_RUNTIME), "NODE_ENV": "development"})
+        # NODE_NO_WARNINGS: library deprecation notices aren't part of the program's output.
+        node_env = {"NODE_PATH": str(NODE_RUNTIME), "NODE_ENV": "development", "NODE_NO_WARNINGS": "1"}
+        if not network_allowed():
+            # NODE_OPTIONS also reaches the child that lf_mongo.cjs starts.
+            node_env["NODE_OPTIONS"] = f'--require "{(HARNESS / "lf_nonet.cjs").as_posix()}"'  # quotes: backslashes are escapes
+        run = self._exec(cmd, wd, stdin, "javascript", timeout=timeout, extra_env=node_env)
         if run.timed_out and re.search(r"listen\(", code):
             return RunResult(status="failed", output=_clip(run.output), retryable=True, note=(
                 "The server kept running. It should call its own routes, print the responses and close."))
@@ -309,6 +356,8 @@ class CodeRunner:
                 chrome, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run",
                 "--no-default-browser-check", "--disable-extensions", "--mute-audio",
                 f"--user-data-dir={wd / '.chrome'}", "--window-size=1280,860",
+                # Containers: no user namespaces for Chrome's sandbox, and a tiny /dev/shm.
+                *(["--no-sandbox", "--disable-dev-shm-usage"] if os.environ.get("CHROME_NO_SANDBOX") == "1" else []),
                 "--virtual-time-budget=4000", f"--screenshot={shot}",
             ]
             if os.environ.get("HTML_ALLOW_NETWORK") != "1":
@@ -347,6 +396,8 @@ class CodeRunner:
                 "-v", f"{wd.resolve()}:/work", "-w", "/work", *env_args, DOCKER_IMAGES[lang], *cmd,
             ]
             timeout += 15  # container start-up
+        elif self.backend == "local":
+            cmd = [*_netns_prefix(), *cmd]
         return _run_process(cmd, wd, stdin, timeout, env)
 
     def _result(self, proc: _Proc) -> RunResult:
@@ -476,22 +527,54 @@ def _clean_env(wd: Path, extra: dict) -> dict:
 
 
 def _run_process(cmd: list[str], wd: Path, stdin: str, timeout: int, env: dict) -> _Proc:
-    start = time.monotonic()
-    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-    if os.name == "nt" and cmd and not Path(cmd[0]).is_absolute():
+    flags = 0 if POSIX else subprocess.CREATE_NO_WINDOW
+    if not POSIX and cmd and not Path(cmd[0]).is_absolute():
         cmd = [shutil.which(cmd[0], path=env.get("PATH")) or cmd[0], *cmd[1:]]
-    try:
-        proc = subprocess.run(
-            cmd, cwd=wd, input=stdin.encode("utf-8"), stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, timeout=timeout, env=env, creationflags=flags,
+    prlimit = shutil.which("prlimit") if POSIX else None
+    if prlimit:
+        # No core dumps, no file over 64 MB, and a CPU-seconds ceiling (threads count, so be generous).
+        cmd = [prlimit, "--core=0", f"--fsize={64 << 20}", f"--cpu={timeout * 4 + 10}", "--", *cmd]
+    with _SLOTS:
+        start = time.monotonic()
+        proc = subprocess.Popen(
+            cmd, cwd=wd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            env=env, creationflags=flags, start_new_session=POSIX,
         )
-        out, code, timed_out = proc.stdout, proc.returncode, False
-    except subprocess.TimeoutExpired as exc:
-        out, code, timed_out = exc.stdout or b"", -1, True
-    text = out.decode("utf-8", errors="replace").replace("\r\n", "\n")
+        try:
+            out, _ = proc.communicate(stdin.encode("utf-8"), timeout=timeout)
+            code, timed_out = proc.returncode, False
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc)
+            try:
+                out, _ = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                out = b""
+            code, timed_out = -1, True
+        finally:
+            if POSIX:
+                _kill_tree(proc)  # anything the program left running in the background
+        elapsed = int((time.monotonic() - start) * 1000)
+    text = (out or b"").decode("utf-8", errors="replace").replace("\r\n", "\n")
     text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)  # strip colour codes
     text = _NOISE.sub("", text)
-    return _Proc(code, text, timed_out, int((time.monotonic() - start) * 1000))
+    return _Proc(code, text, timed_out, elapsed)
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    if POSIX:
+        import signal
+
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    elif proc.poll() is None:
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+    try:
+        proc.kill()
+    except OSError:
+        pass
 
 
 def _clip(text: str) -> str:

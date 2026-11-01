@@ -292,7 +292,12 @@ OPENAI_COMPATIBLE = {
     "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "openai/gpt-oss-120b:free"),
     "mistral": ("https://api.mistral.ai/v1", "MISTRAL_API_KEY", "mistral-small-latest"),
     "github": ("https://models.github.ai/inference", "GITHUB_MODELS_TOKEN", "openai/gpt-4.1-mini"),
+    # Workers AI behind a tiny proxy Worker on your own Cloudflare account (deploy/cloudflare-ai).
+    # Free plan: 10,000 neurons a day, about 30 sheets with gpt-oss-120b.
+    "cloudflare": ("", "CLOUDFLARE_AI_KEY", "@cf/openai/gpt-oss-120b"),
 }
+# Providers that accept OpenAI's reasoning_effort for gpt-oss; low keeps hidden reasoning short.
+REASONING_EFFORT = {"groq", "cerebras", "cloudflare"}
 
 
 class OpenAICompatProvider:
@@ -307,7 +312,7 @@ class OpenAICompatProvider:
 
     @property
     def configured(self) -> bool:
-        return bool(self.api_key)
+        return bool(self.api_key and self.base)
 
     def generate(self, sheet: str, language: str = "", subject: str = "", variant: int = 0) -> AIReport:
         prompt = build_user_prompt(sheet, language, subject, variant)
@@ -327,6 +332,8 @@ class OpenAICompatProvider:
             "max_tokens": self.max_output,
             "response_format": {"type": "json_object"},
         }
+        if self.name in REASONING_EFFORT and "gpt-oss" in self.model:
+            body["reasoning_effort"] = os.environ.get("AI_REASONING_EFFORT", "low")
         headers = {"Authorization": f"Bearer {self.api_key}"}
         if self.name == "openrouter":
             headers["X-Title"] = "LabForge"
@@ -468,7 +475,7 @@ def _guess_stdin(code: str) -> str:
 def get_provider():
     if os.environ.get("AI_MODE", "cloud").lower() == "local":
         return LocalProvider()
-    order = os.environ.get("AI_PROVIDERS", "gemini,groq,cerebras,openrouter,mistral,github")
+    order = os.environ.get("AI_PROVIDERS", "gemini,cloudflare,groq,cerebras,openrouter,mistral,github")
     providers = []
     for name in (p.strip().lower() for p in order.split(",") if p.strip()):
         if name == "gemini":

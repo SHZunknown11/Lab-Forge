@@ -35,6 +35,26 @@ def _input(prompt=""):
 builtins.input = _input
 os.environ.setdefault("MPLBACKEND", "Agg")
 
+if os.environ.get("LF_NO_NET") == "1":
+    # Only connections to this machine; lab programs don't need the internet.
+    import socket
+
+    def _local(addr):
+        if not isinstance(addr, tuple) or not addr:
+            return True  # unix socket
+        host = str(addr[0]).lower().strip("[]")
+        return host in ("localhost", "::1") or host.startswith(("127.", "::ffff:127."))
+
+    def _guard(original):
+        def connect(self, addr):
+            if not _local(addr):
+                raise OSError(101, "Network is unreachable (lab programs can't reach the internet here)")
+            return original(self, addr)
+        return connect
+
+    socket.socket.connect = _guard(socket.socket.connect)
+    socket.socket.connect_ex = _guard(socket.socket.connect_ex)
+
 if os.environ.get("LF_MPL") == "1":
     try:
         import matplotlib

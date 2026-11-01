@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from core.execution.runner import CodeRunner, prepare_java, safe_rel
@@ -81,3 +83,48 @@ def test_prepare_java_keeps_one_public_class():
 ])
 def test_file_names_cannot_escape_the_work_folder(name, expected):
     assert safe_rel(name, "python") == expected
+
+
+def test_python_network_guard_blocks_internet_but_not_loopback(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXEC_ALLOW_NETWORK", "0")
+    code = (
+        "import socket\n"
+        "srv = socket.socket(); srv.bind(('127.0.0.1', 0)); srv.listen(1)\n"
+        "socket.create_connection(srv.getsockname(), timeout=2).close(); print('loopback ok')\n"
+        "try:\n"
+        "    socket.create_connection(('1.1.1.1', 80), timeout=2)\n"
+        "except OSError as e:\n"
+        "    print('blocked', e.errno)\n"
+    )
+    result = runner.run("python", [CodeFile(name="main.py", code=code)], "", tmp_path)
+    assert result.output.splitlines() == ["loopback ok", "blocked 101"]
+
+
+@needs_node
+def test_node_network_guard_blocks_internet_but_not_loopback(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXEC_ALLOW_NETWORK", "0")
+    code = (
+        "const net = require('net');\n"
+        "const srv = net.createServer((s) => s.end()).listen(0, '127.0.0.1', () => {\n"
+        "  net.connect(srv.address().port, '127.0.0.1', () => {\n"
+        "    console.log('loopback ok');\n"
+        "    net.connect(80, '1.1.1.1').on('error', (e) => { console.log('blocked', e.code); srv.close(); });\n"
+        "  });\n"
+        "});\n"
+    )
+    result = runner.run("javascript", [CodeFile(name="index.js", code=code)], "", tmp_path)
+    assert result.output.splitlines() == ["loopback ok", "blocked ENETUNREACH"]
+
+
+def test_timeout_kills_the_program_and_its_children(tmp_path):
+    quick = CodeRunner(timeout_seconds=3)
+    code = (
+        "import subprocess, sys, time\n"
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        "print('started', flush=True)\n"
+        "time.sleep(60)\n"
+    )
+    start = time.monotonic()
+    result = quick.run("python", [CodeFile(name="main.py", code=code)], "", tmp_path)
+    assert result.status == "failed" and "started" in result.output
+    assert time.monotonic() - start < 20  # the sleeping grandchild doesn't hold the run open

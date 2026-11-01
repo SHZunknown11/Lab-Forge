@@ -56,6 +56,48 @@ def node_runtime() -> None:
                           cwd=node_dir, shell=sys.platform == "win32")
 
 
+def download(url: str, dest: Path) -> None:
+    """Download to dest via dest.part, resuming a partial file if the server allows it."""
+    tmp = dest.with_name(dest.name + ".part")
+    legacy = dest.with_suffix(".part")  # name used by older versions of this script
+    if legacy.exists() and not tmp.exists():
+        legacy.replace(tmp)
+    have = tmp.stat().st_size if tmp.exists() else 0
+    req = urllib.request.Request(url, headers={"Range": f"bytes={have}-"} if have else {})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        resumed = have and resp.status == 206
+        total = int(resp.headers.get("Content-Length") or 0) + (have if resumed else 0)
+        if have and not resumed:
+            have = 0
+        done = have
+        last = -1
+        with tmp.open("ab" if resumed else "wb") as out:
+            while chunk := resp.read(1 << 20):
+                out.write(chunk)
+                done += len(chunk)
+                pct = int(done * 100 / total) if total else 0
+                if pct // 10 != last:
+                    last = pct // 10
+                    print(f"  {done >> 20} / {total >> 20} MB", flush=True)
+    if total and tmp.stat().st_size != total:
+        raise RuntimeError(f"download incomplete ({tmp.stat().st_size} of {total} bytes); run again to resume")
+    tmp.replace(dest)
+
+
+def linux_build() -> str:
+    """MongoDB publishes per-distro builds; Debian 12 images need the debian12 one."""
+    try:
+        info = dict(line.split("=", 1) for line in Path("/etc/os-release").read_text().splitlines() if "=" in line)
+    except OSError:
+        return "ubuntu2204"
+    distro, version = info.get("ID", "").strip('"'), info.get("VERSION_ID", "").strip('"')
+    if distro == "debian" and version.startswith("12"):
+        return "debian12"
+    if distro == "ubuntu" and version.startswith("24"):
+        return "ubuntu2404"
+    return "ubuntu2204"
+
+
 def mongo() -> Path:
     system = platform.system()
     target = RUNTIME / "mongodb" / ("mongod.exe" if system == "Windows" else "mongod")
@@ -67,14 +109,12 @@ def mongo() -> Path:
         arch = "arm64" if platform.machine() == "arm64" else "x86_64"
         url = f"https://fastdl.mongodb.org/osx/mongodb-macos-{arch}-{MONGO_VERSION}.tgz"
     else:
-        url = f"https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-ubuntu2204-{MONGO_VERSION}.tgz"
+        url = f"https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-{linux_build()}-{MONGO_VERSION}.tgz"
     archive = RUNTIME / "mongodb" / Path(url).name
     archive.parent.mkdir(parents=True, exist_ok=True)
     if not archive.exists():
         print(f"Downloading {url} (large on Windows; only mongod is kept)…")
-        tmp = archive.with_suffix(".part")
-        urllib.request.urlretrieve(url, tmp)
-        tmp.replace(archive)
+        download(url, archive)
     if archive.suffix == ".zip":
         with zipfile.ZipFile(archive) as zf:
             name = next(n for n in zf.namelist() if n.endswith("/bin/mongod.exe"))
