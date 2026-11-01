@@ -26,6 +26,7 @@ import shutil
 import socketserver
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -350,12 +351,14 @@ class CodeRunner:
     def _screenshot(self, site: Path, entry: str, wd: Path) -> RunResult:
         chrome = find_chrome()
         shot = wd / "figure_01.png"
+        # Chrome puts a unix socket in its profile folder; job paths are too long for that (108 chars).
+        profile = Path(tempfile.mkdtemp(prefix="lfc-")) if POSIX else wd / ".chrome"
         with _StaticServer(site) as port:
             url = f"http://127.0.0.1:{port}/{entry}"
             cmd = [
                 chrome, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run",
                 "--no-default-browser-check", "--disable-extensions", "--mute-audio",
-                f"--user-data-dir={wd / '.chrome'}", "--window-size=1280,860",
+                f"--user-data-dir={profile}", "--window-size=1280,860",
                 # Containers: no user namespaces for Chrome's sandbox, and a tiny /dev/shm.
                 *(["--no-sandbox", "--disable-dev-shm-usage"] if os.environ.get("CHROME_NO_SANDBOX") == "1" else []),
                 "--virtual-time-budget=4000", f"--screenshot={shot}",
@@ -365,7 +368,7 @@ class CodeRunner:
                 cmd += ["--proxy-server=http://127.0.0.1:9", f"--proxy-bypass-list=<-loopback>;127.0.0.1:{port}"]
             cmd.append(url)
             proc = _run_process(cmd, wd, "", 30, _clean_env(wd, {}))
-        shutil.rmtree(wd / ".chrome", ignore_errors=True)
+        shutil.rmtree(profile, ignore_errors=True)
         if not shot.exists():
             return RunResult(status="failed", note="The page couldn't be rendered.", output=_clip(proc.output))
         _trim_page_screenshot(shot)

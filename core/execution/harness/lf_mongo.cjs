@@ -1,6 +1,13 @@
 // Starts a throwaway in-memory MongoDB, runs the student's entry file with
 // MONGO_URI pointing at it, then stops the database. Nothing is persisted.
-const { MongoMemoryServer } = require("mongodb-memory-server");
+// The -core package has no download step; scripts/setup_runtime.py supplies the mongod binary.
+const { MongoMemoryServer } = (() => {
+  try {
+    return require("mongodb-memory-server-core");
+  } catch {
+    return require("mongodb-memory-server");
+  }
+})();
 const { spawn } = require("child_process");
 
 (async () => {
