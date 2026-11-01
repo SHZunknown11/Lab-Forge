@@ -367,7 +367,9 @@ class CodeRunner:
                 # Only our own static server is reachable; everything else hits a dead proxy.
                 cmd += ["--proxy-server=http://127.0.0.1:9", f"--proxy-bypass-list=<-loopback>;127.0.0.1:{port}"]
             cmd.append(url)
-            proc = _run_process(cmd, wd, "", 30, _clean_env(wd, {}))
+            # Chrome also keeps its singleton socket under TMPDIR, so that has to be short too.
+            short_tmp = {k: str(profile) for k in ("TMPDIR", "TMP", "TEMP")} if POSIX else {}
+            proc = _run_process(cmd, wd, "", 30, _clean_env(wd, short_tmp))
         shutil.rmtree(profile, ignore_errors=True)
         if not shot.exists():
             return RunResult(status="failed", note="The page couldn't be rendered.", output=_clip(proc.output))
@@ -535,8 +537,9 @@ def _run_process(cmd: list[str], wd: Path, stdin: str, timeout: int, env: dict) 
         cmd = [shutil.which(cmd[0], path=env.get("PATH")) or cmd[0], *cmd[1:]]
     prlimit = shutil.which("prlimit") if POSIX else None
     if prlimit:
-        # No core dumps, no file over 64 MB, and a CPU-seconds ceiling (threads count, so be generous).
-        cmd = [prlimit, "--core=0", f"--fsize={64 << 20}", f"--cpu={timeout * 4 + 10}", "--", *cmd]
+        # No core dumps, no file over 1 GB (MongoDB preallocates ~100 MB journals), and a
+        # CPU-seconds ceiling (threads count, so be generous).
+        cmd = [prlimit, "--core=0", f"--fsize={1 << 30}", f"--cpu={timeout * 4 + 10}", "--", *cmd]
     with _SLOTS:
         start = time.monotonic()
         proc = subprocess.Popen(

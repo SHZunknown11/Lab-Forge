@@ -80,3 +80,9 @@ jobs:
       - name: Logs
         if: always()
         run: docker logs lf 2>&1 | tail -80
+      - name: Diagnose runtimes
+        if: failure()
+        run: |
+          docker exec lf /app/.runtime/mongodb/mongod --version || true
+          docker exec lf sh -c 'mkdir -p /tmp/m && timeout 10 /app/.runtime/mongodb/mongod --dbpath /tmp/m --port 27999 --bind_ip 127.0.0.1 2>&1 | tail -5' || true
+          docker exec lf sh -c 'ls -la /app/.runtime/node/node_modules | grep -i mongo' || true

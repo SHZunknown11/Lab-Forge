@@ -11,7 +11,8 @@ const { MongoMemoryServer } = (() => {
 const { spawn } = require("child_process");
 
 (async () => {
-  const mongod = await MongoMemoryServer.create();
+  // A small cache: several programs may run at once on a shared server.
+  const mongod = await MongoMemoryServer.create({ instance: { args: ["--wiredTigerCacheSizeGB", "0.25"] } });
   const uri = mongod.getUri("labdb");
   const child = spawn(process.execPath, [process.argv[2]], {
     stdio: "inherit",
