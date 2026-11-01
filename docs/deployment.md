@@ -1,9 +1,26 @@
 # Deploying LabForge
 
-## Hugging Face Spaces (free)
+## Render (free, no card)
 
-A Docker Space gives 2 vCPU and 16 GB RAM for free; the container sleeps
-after two days without visitors and wakes on the next visit (about a minute).
+`render.yaml` describes the service; `scripts/deploy_render.py` creates it
+through Render's API (needs `RENDER_API_KEY` in `.env`), copies the AI keys
+from `.env`, waits for the build and smoke-tests the live URL. Render builds
+from the GitHub repo, so push before deploying.
+
+The free instance has 512 MB RAM and 0.1 CPU, so the service runs with
+`LABFORGE_MAX_PARALLEL_RUNS=1` (programs, Chrome and LibreOffice take turns)
+and `LABFORGE_TIMEOUT_SCALE=5`. A report takes a minute or two instead of
+seconds. Free services sleep after 15 idle minutes; `deploy/keepalive` is a
+Cloudflare Worker cron that pings `/api/health` every 10 minutes from 07:30 to
+00:30 IST. All free services in a workspace share 750 hours a month, and
+Render suspends them all when the hours run out, so don't ping around the
+clock if the workspace has other free services.
+
+## Hugging Face Spaces (needs PRO)
+
+Since 2026 Hugging Face only hosts Docker and Gradio Spaces for PRO accounts
+(free accounts get static Spaces only). With PRO, a Docker Space gives 2 vCPU
+and 16 GB RAM.
 
 1. Create a write token at https://huggingface.co/settings/tokens and add
    `HF_TOKEN=...` to `.env`.

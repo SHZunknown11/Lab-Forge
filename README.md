@@ -82,16 +82,18 @@ use Cloudflare). Set any of them; the order in `AI_PROVIDERS` is the failover or
 
 ## Deploy and monetise
 
-Free hosting on a Hugging Face Space (2 vCPU, 16 GB RAM):
+Live on Render's free plan (no card): https://labforge-e9yk.onrender.com
 
 ```powershell
-# HF_TOKEN=<write token> in .env, then:
-.venv\Scripts\python scripts\deploy_hf.py
+# RENDER_API_KEY=<key> in .env, push to GitHub, then:
+.venv\Scripts\python scripts\deploy_render.py
 ```
 
-It creates the Space, copies your AI keys into Space secrets, uploads the
-source, waits for the build and runs `scripts/smoke_test.py` against the live
-site. The same `Dockerfile` runs on Render, Koyeb, Fly or any VPS. See
+It creates or updates the service, copies your AI keys into its environment,
+waits for the build and runs `scripts/smoke_test.py` against the live site. A
+scheduled Cloudflare Worker ([deploy/keepalive](deploy/keepalive/worker.js))
+keeps it awake during the day. The same `Dockerfile` runs on Hugging Face
+Spaces (`scripts/deploy_hf.py`, needs PRO), Koyeb, Fly or any VPS. See
 [docs/deployment.md](docs/deployment.md) for sandboxing, token spend and AdSense.
 
 ## Tests

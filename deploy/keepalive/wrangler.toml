@@ -1,0 +1,16 @@
+# npx wrangler deploy   (from this folder)
+name = "labforge-keepalive"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+workers_dev = false
+
+[vars]
+TARGET = "https://labforge-e9yk.onrender.com/api/health"
+
+# Every 10 minutes, 02:00-18:59 UTC = 07:30-00:29 IST (about 530 hours a month,
+# leaving room in Render's 750 free hours for other free services).
+[triggers]
+crons = ["*/10 2-18 * * *"]
+
+[observability]
+enabled = true
