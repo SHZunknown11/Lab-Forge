@@ -304,7 +304,8 @@ def admin_status(request: Request, token: str = ""):
         "sandbox": sandbox_report(),
         "pdf": PdfConverter().available(),
         "client_ip": client_ip(request),
-        "forwarded_for": request.headers.get("x-forwarded-for", ""),
+        "ip_headers": {h: request.headers.get(h, "") for h in (
+            "x-forwarded-for", "x-real-ip", "true-client-ip", "cf-connecting-ip")},
     }
 
 

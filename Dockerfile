@@ -1,7 +1,7 @@
 # LabForge: the web app plus everything student programs need, in one image.
 #   docker build -t labforge .
 #   docker run -p 7860:7860 --env-file .env labforge
-# Works as-is on Hugging Face Spaces (port 7860, user 1000), Render, Koyeb, Fly or any VPS.
+# Works as-is on Render (render.yaml), Hugging Face Spaces (port 7860, user 1000), Koyeb, Fly or any VPS.
 
 # ── frontend ─────────────────────────────────────────────────────
 FROM node:22-bookworm-slim AS web
@@ -65,7 +65,8 @@ ENV HOME=/home/user \
     PDF_BACKEND=auto \
     LABFORGE_TRUST_PROXY=1 \
     LABFORGE_JOB_TTL_HOURS=6 \
-    LABFORGE_MAX_PARALLEL_RUNS=3
+    LABFORGE_MAX_PARALLEL_RUNS=3 \
+    EXEC_JAVA_OPTS="-XX:+UseSerialGC -XX:TieredStopAtLevel=1"
 
 EXPOSE 7860
 HEALTHCHECK --interval=60s --timeout=5s --start-period=40s \

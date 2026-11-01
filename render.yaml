@@ -1,0 +1,33 @@
+# Render Blueprint: one free web service built from the Dockerfile.
+# scripts/deploy_render.py does the same through Render's API and copies keys from .env.
+services:
+  - type: web
+    name: labforge
+    runtime: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /api/health
+    envVars:
+      # AI keys: fill in at least one.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: CLOUDFLARE_AI_KEY
+        sync: false
+      - key: CLOUDFLARE_BASE_URL
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: CEREBRAS_API_KEY
+        sync: false
+      - key: AI_PROVIDERS
+        value: gemini,cloudflare,groq,cerebras,openrouter,mistral,github
+      - key: LABFORGE_ADMIN_TOKEN
+        generateValue: true
+      # The free instance has 512 MB and a tenth of a CPU: one heavy process at a time,
+      # five times the usual timeouts.
+      - key: LABFORGE_MAX_PARALLEL_RUNS
+        value: "1"
+      - key: LABFORGE_TIMEOUT_SCALE
+        value: "5"
+      - key: LABFORGE_TRUST_PROXY
+        value: "1"

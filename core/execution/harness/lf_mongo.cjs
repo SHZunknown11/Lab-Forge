@@ -12,7 +12,9 @@ const { spawn } = require("child_process");
 
 (async () => {
   // A small cache: several programs may run at once on a shared server.
-  const mongod = await MongoMemoryServer.create({ instance: { args: ["--wiredTigerCacheSizeGB", "0.25"] } });
+  const mongod = await MongoMemoryServer.create({
+    instance: { args: ["--wiredTigerCacheSizeGB", "0.25"], launchTimeout: 90000 }, // slow CPUs start slowly
+  });
   const uri = mongod.getUri("labdb");
   const child = spawn(process.execPath, [process.argv[2]], {
     stdio: "inherit",

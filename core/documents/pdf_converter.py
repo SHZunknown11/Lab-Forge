@@ -49,7 +49,9 @@ class PdfConverter:
         self.gotenberg_url = (gotenberg_url if gotenberg_url is not None
                               else os.environ.get("GOTENBERG_URL", "")).rstrip("/")
         self.client = client
-        self.timeout = timeout or float(os.environ.get("PDF_CONVERSION_TIMEOUT_SECONDS", "120"))
+        from core.execution.runner import TIMEOUT_SCALE
+
+        self.timeout = timeout or float(os.environ.get("PDF_CONVERSION_TIMEOUT_SECONDS", "120")) * TIMEOUT_SCALE
 
     def available(self) -> bool:
         if self.backend == "gotenberg":
@@ -95,7 +97,10 @@ class PdfConverter:
         outdir.mkdir(parents=True, exist_ok=True)
         cmd = [soffice, f"-env:UserInstallation={profile.as_uri()}", "--headless", "--norestore",
                "--nolockcheck", "--convert-to", "pdf", "--outdir", str(outdir), str(src.resolve())]
-        with _LO_LOCK:  # one profile, one conversion at a time
+        from core.execution.runner import RUN_SLOTS
+
+        # One profile, one conversion at a time, and never alongside a program on a small host.
+        with _LO_LOCK, RUN_SLOTS:
             try:
                 subprocess.run(cmd, capture_output=True, timeout=self.timeout,
                                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)

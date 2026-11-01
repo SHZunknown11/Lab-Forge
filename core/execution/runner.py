@@ -39,7 +39,15 @@ HARNESS = Path(__file__).parent / "harness"
 NODE_RUNTIME = Path(os.environ.get("EXEC_NODE_MODULES", ROOT / ".runtime" / "node" / "node_modules"))
 MAX_OUTPUT_CHARS = 20_000
 POSIX = os.name != "nt"
-_SLOTS = threading.BoundedSemaphore(max(1, int(os.environ.get("LABFORGE_MAX_PARALLEL_RUNS", "3"))))
+# Heavy child processes (programs, Chrome, LibreOffice) share these slots; 1 on a 512 MB host.
+RUN_SLOTS = threading.BoundedSemaphore(max(1, int(os.environ.get("LABFORGE_MAX_PARALLEL_RUNS", "3"))))
+_SLOTS = RUN_SLOTS
+# Multiplies every timeout: set 4-5 on a host with a fraction of a CPU.
+TIMEOUT_SCALE = max(1.0, float(os.environ.get("LABFORGE_TIMEOUT_SCALE", "1") or 1))
+
+
+def scaled(seconds: float) -> int:
+    return int(seconds * TIMEOUT_SCALE)
 
 
 def network_allowed() -> bool:
@@ -148,7 +156,9 @@ def safe_rel(name: str, language: str) -> str:
 
 class CodeRunner:
     def __init__(self, timeout_seconds: int | None = None, backend: str | None = None):
-        self.timeout = timeout_seconds or int(os.environ.get("LABFORGE_EXECUTION_TIMEOUT_SECONDS", "12"))
+        self.timeout = timeout_seconds or scaled(int(os.environ.get("LABFORGE_EXECUTION_TIMEOUT_SECONDS", "12")))
+        # Extra JVM flags, e.g. "-XX:+UseSerialGC -XX:TieredStopAtLevel=1" for small hosts.
+        self.java_opts = os.environ.get("EXEC_JAVA_OPTS", "").split()
         self.backend = (backend or os.environ.get("EXEC_BACKEND", "local")).lower()
         self.python = os.environ.get("EXEC_PYTHON") or _bundled_python() or shutil.which("python") or sys.executable
 
@@ -217,8 +227,8 @@ class CodeRunner:
                     entry = prepare_java(code)[1]
             entry = entry or Path(sources[0]).stem
         shutil.copy(HARNESS / "LFLauncher.java", wd / "LFLauncher.java")
-        comp = self._exec(["javac", "-encoding", "UTF-8", "-nowarn", *sources, "LFLauncher.java"],
-                          wd, "", "java", timeout=max(self.timeout, 25))
+        comp = self._exec(["javac", *(f"-J{o}" for o in self.java_opts), "-encoding", "UTF-8", "-nowarn",
+                           *sources, "LFLauncher.java"], wd, "", "java", timeout=max(self.timeout, scaled(25)))
         if comp.code != 0:
             missing = re.search(r"package ((?!java\.)[\w.]+) does not exist", comp.output)
             if missing:
@@ -230,7 +240,7 @@ class CodeRunner:
         no_net = [] if network_allowed() else [
             f"-D{k}=127.0.0.1" for k in ("http.proxyHost", "https.proxyHost", "socksProxyHost")
         ] + [f"-D{k}=9" for k in ("http.proxyPort", "https.proxyPort", "socksProxyPort")]
-        run = self._exec(["java", *no_net, "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
+        run = self._exec(["java", *self.java_opts, *no_net, "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
                           "-Xss8m", "-cp", ".", "LFLauncher", entry], wd, stdin, "java")
         if "HeadlessException" in run.output:
             return RunResult(status="not_run", note="This program opens a window. Add a screenshot of it.")
@@ -249,7 +259,7 @@ class CodeRunner:
         }
         exe = self.python if self.backend == "local" else "python"
         run = self._exec([exe, "-u", "lf_python.py", entry], wd, stdin, "python", extra_env=flags,
-                         timeout=self.timeout + (8 if flags["LF_MPL"] == "1" or flags["LF_CV2"] == "1" else 0))
+                         timeout=self.timeout + scaled(8 if flags["LF_MPL"] == "1" or flags["LF_CV2"] == "1" else 0))
         missing = re.search(r"ModuleNotFoundError: No module named '([\w.]+)'", run.output)
         if missing:
             return RunResult(status="not_run", note=(
@@ -282,7 +292,7 @@ class CodeRunner:
                     "Needs a MongoDB server, which isn't set up here. Run it on your machine and add a screenshot."))
             shutil.copy(HARNESS / "lf_mongo.cjs", wd / "lf_mongo.cjs")
             cmd = ["node", "lf_mongo.cjs", entry]
-            timeout += 25
+            timeout += scaled(25)
         # NODE_NO_WARNINGS: library deprecation notices aren't part of the program's output.
         node_env = {"NODE_PATH": str(NODE_RUNTIME), "NODE_ENV": "development", "NODE_NO_WARNINGS": "1"}
         if not network_allowed():
@@ -314,7 +324,7 @@ class CodeRunner:
                 "createRoot(document.getElementById('root')).render(<App />);\n", encoding="utf-8")
             entry = "__entry.jsx"
         shutil.copy(HARNESS / "lf_react_build.cjs", wd / "lf_react_build.cjs")
-        build = _run_process(["node", "lf_react_build.cjs", f"src/{entry}"], wd, "", 60,
+        build = _run_process(["node", "lf_react_build.cjs", f"src/{entry}"], wd, "", scaled(60),
                              _clean_env(wd, {"LF_NODE_MODULES": str(NODE_RUNTIME), "NODE_PATH": str(NODE_RUNTIME)}))
         if build.code != 0 or not (wd / "dist" / "app.js").exists():
             return RunResult(status="failed", output=_clip(build.output), retryable=True,
@@ -360,7 +370,9 @@ class CodeRunner:
                 "--no-default-browser-check", "--disable-extensions", "--mute-audio",
                 f"--user-data-dir={profile}", "--window-size=1280,860",
                 # Containers: no user namespaces for Chrome's sandbox, and a tiny /dev/shm.
-                *(["--no-sandbox", "--disable-dev-shm-usage"] if os.environ.get("CHROME_NO_SANDBOX") == "1" else []),
+                *(["--no-sandbox", "--disable-dev-shm-usage", "--renderer-process-limit=1",
+                   "--disable-background-networking", "--disable-component-update", "--disable-sync"]
+                  if os.environ.get("CHROME_NO_SANDBOX") == "1" else []),
                 "--virtual-time-budget=4000", f"--screenshot={shot}",
             ]
             if os.environ.get("HTML_ALLOW_NETWORK") != "1":
@@ -369,7 +381,7 @@ class CodeRunner:
             cmd.append(url)
             # Chrome also keeps its singleton socket under TMPDIR, so that has to be short too.
             short_tmp = {k: str(profile) for k in ("TMPDIR", "TMP", "TEMP")} if POSIX else {}
-            proc = _run_process(cmd, wd, "", 30, _clean_env(wd, short_tmp))
+            proc = _run_process(cmd, wd, "", scaled(30), _clean_env(wd, short_tmp))
         shutil.rmtree(profile, ignore_errors=True)
         if not shot.exists():
             return RunResult(status="failed", note="The page couldn't be rendered.", output=_clip(proc.output))

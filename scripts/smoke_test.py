@@ -92,7 +92,7 @@ class Smoke:
         self.failures: list[str] = []
 
     def call(self, method: str, path: str, body: bytes | None = None, headers: dict | None = None,
-             timeout: float = 180) -> tuple[int, bytes]:
+             timeout: float = 600) -> tuple[int, bytes]:
         req = urllib.request.Request(self.base + path, data=body, method=method, headers=headers or {})
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
