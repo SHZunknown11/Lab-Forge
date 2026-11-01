@@ -59,6 +59,8 @@ JOB_TTL_HOURS = float(os.environ.get("LABFORGE_JOB_TTL_HOURS", "24"))
 AI_DAILY = int(os.environ.get("LABFORGE_AI_DAILY_LIMIT", "10"))
 # Number of reverse proxies in front of the app that append to X-Forwarded-For (0 = none).
 TRUST_PROXY = int(os.environ.get("LABFORGE_TRUST_PROXY", "0") or 0)
+# Or a header the edge sets and visitors can't forge, e.g. true-client-ip on Render (Cloudflare).
+CLIENT_IP_HEADER = os.environ.get("LABFORGE_CLIENT_IP_HEADER", "").strip().lower()
 DIST = ROOT / "apps" / "frontend" / "dist"
 
 app = FastAPI(title="LabForge", docs_url=None, redoc_url=None)
@@ -104,6 +106,10 @@ limiter = Limiter()
 
 
 def client_ip(request: Request) -> str:
+    if CLIENT_IP_HEADER:
+        value = request.headers.get(CLIENT_IP_HEADER, "").split(",")[0].strip()
+        if value:
+            return value
     if TRUST_PROXY:
         # Visitors can send their own X-Forwarded-For; only the entries our proxies append count.
         hops = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]

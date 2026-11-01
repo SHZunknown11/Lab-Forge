@@ -31,3 +31,6 @@ services:
         value: "5"
       - key: LABFORGE_TRUST_PROXY
         value: "1"
+      # Set by Cloudflare in front of Render; visitors can't forge it.
+      - key: LABFORGE_CLIENT_IP_HEADER
+        value: true-client-ip

@@ -95,6 +95,9 @@ def test_client_ip_ignores_spoofed_forwarded_for(monkeypatch):
     assert main.client_ip(Req()) == "10.0.0.1"
     monkeypatch.setattr(main, "TRUST_PROXY", 1)
     assert main.client_ip(Req()) == "203.0.113.9"  # the hop our proxy added, not the visitor's claim
+    Req.headers = {**Req.headers, "true-client-ip": "198.51.100.7"}
+    monkeypatch.setattr(main, "CLIENT_IP_HEADER", "true-client-ip")
+    assert main.client_ip(Req()) == "198.51.100.7"
 
 
 def test_health_and_hidden_admin(client):

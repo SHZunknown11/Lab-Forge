@@ -34,6 +34,8 @@ SMALL_HOST = {
     "LABFORGE_MAX_PARALLEL_RUNS": "1",
     "LABFORGE_TIMEOUT_SCALE": "5",
     "LABFORGE_TRUST_PROXY": "1",
+    # Render is behind Cloudflare, which sets this from the real connection.
+    "LABFORGE_CLIENT_IP_HEADER": "true-client-ip",
 }
 
 
