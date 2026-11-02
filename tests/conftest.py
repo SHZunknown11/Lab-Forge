@@ -18,7 +18,8 @@ def isolated_storage(tmp_path, monkeypatch):
     from core.pipeline import orchestrator
 
     monkeypatch.setattr(orchestrator, "JOBS_ROOT", tmp_path / "jobs")
-    monkeypatch.setenv("LABFORGE_LOG_DB_URL", "")
+    monkeypatch.setenv("LABFORGE_LOG_DB_URL", "")  # set (even empty), so load_dotenv can't fill it from .env
+    monkeypatch.setenv("LABFORGE_ACTIVITY_LOG", str(tmp_path / "activity.jsonl"))
     if "apps.api.main" in sys.modules:
         monkeypatch.setattr(sys.modules["apps.api.main"], "activity", ActivityLog(path=tmp_path / "activity.jsonl"))
     monkeypatch.setenv("LABFORGE_CACHE_DIR", str(tmp_path / "cache"))
