@@ -7,6 +7,7 @@ interface Props {
   jobId: string
   meta: Meta
   busy: Record<number, string>
+  uploading: Record<number, boolean>
   onChange: (draft: Draft) => void
   onRun: (index: number) => void
   onUpload: (index: number, files: FileList) => void
@@ -20,7 +21,7 @@ const STATUS: Record<string, string> = {
   not_run: "Needs your screenshot",
 }
 
-export function Review({ draft, jobId, meta, busy, onChange, onRun, onUpload, onRewrite, rewriting }: Props) {
+export function Review({ draft, jobId, meta, busy, uploading, onChange, onRun, onUpload, onRewrite, rewriting }: Props) {
   const [open, setOpen] = useState<number | null>(() => {
     const firstProblem = draft.tasks.findIndex((t) => t.status !== "passed")
     return firstProblem >= 0 ? firstProblem : null
@@ -67,6 +68,7 @@ export function Review({ draft, jobId, meta, busy, onChange, onRun, onUpload, on
                   jobId={jobId}
                   meta={meta}
                   busy={!!busy[i]}
+                  uploading={!!uploading[i]}
                   onChange={(patch) => setTask(i, patch)}
                   onRun={() => onRun(i)}
                   onUpload={(files) => onUpload(i, files)}
@@ -100,6 +102,7 @@ function TaskEditor(props: {
   jobId: string
   meta: Meta
   busy: boolean
+  uploading: boolean
   onChange: (patch: Partial<Task>) => void
   onRun: () => void
   onUpload: (files: FileList) => void
@@ -157,8 +160,8 @@ function TaskEditor(props: {
             {props.busy ? "Running…" : "Run again"}
           </button>
         )}
-        <button type="button" className="btn btn--secondary" onClick={() => upload.current?.click()} disabled={props.busy}>
-          Add screenshot
+        <button type="button" className="btn btn--secondary" onClick={() => upload.current?.click()} disabled={props.uploading}>
+          {props.uploading ? "Adding…" : "Add screenshot"}
         </button>
         <input
           ref={upload}

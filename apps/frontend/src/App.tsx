@@ -6,7 +6,7 @@ import { Paper, type Progress } from "./components/Paper"
 import { Feedback } from "./components/Feedback"
 import { Review } from "./components/Review"
 import { defaultFields, documentOrder, today, uid, useStored, type RecentSubject } from "./store"
-import type { Draft, Field, Meta, RenderResult, SavedJob } from "./types"
+import type { Draft, Field, Meta, RenderResult, SavedJob, Task } from "./types"
 
 const EMPTY_PROGRESS: Progress = { stages: [], tasks: {} }
 
@@ -42,6 +42,7 @@ export default function App() {
   const [progress, setProgress] = useState<Progress>(EMPTY_PROGRESS)
   const [error, setError] = useState("")
   const [busy, setBusy] = useState<Record<number, string>>({})
+  const [uploading, setUploading] = useState<Record<number, boolean>>({})
   const [render, setRender] = useState<RenderResult | null>(null)
   const [renderKey, setRenderKey] = useState("")
   const [rendering, setRendering] = useState(false)
@@ -99,11 +100,11 @@ export default function App() {
 
   // Once the programs have run (or been re-run), make the Word and PDF files without being asked.
   useEffect(() => {
-    if (!autoMake || !job || writing || rendering || Object.keys(busy).length) return
+    if (!autoMake || !job || writing || rendering || Object.keys(busy).length || Object.keys(uploading).length) return
     setAutoMake(false)
     void makeFiles()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoMake, job, writing, rendering, busy])
+  }, [autoMake, job, writing, rendering, busy, uploading])
 
   const focusField = (id: string) => {
     setView("edit")
@@ -179,7 +180,12 @@ export default function App() {
               finished = true
               cached = e.cached
               setProgress((p) => ({ ...p, tasks: {} }))
-              setJob({ id: jobId, draft: e.draft, savedAt: Date.now(), cached: e.cached })
+              setJob((j) => ({
+                id: jobId,
+                draft: keepUploads(e.draft, j?.id === jobId ? j.draft : null),
+                savedAt: Date.now(),
+                cached: e.cached,
+              }))
             } else if (e.type === "error") {
               failed = true
               setError(e.message)
@@ -226,7 +232,7 @@ export default function App() {
       try {
         const task = await runTask(jobId, i, draft.tasks[i])
         setJob((j) => (j && j.id === jobId
-          ? { ...j, draft: { ...j.draft, tasks: j.draft.tasks.map((t, k) => (k === i ? task : t)) }, savedAt: Date.now() }
+          ? { ...j, draft: { ...j.draft, tasks: j.draft.tasks.map((t, k) => (k === i ? keepUploads(task, t) : t)) }, savedAt: Date.now() }
           : j))
         setProgress((p) => ({ ...p, tasks: { ...p.tasks, [i]: task.status } }))
       } catch (e) {
@@ -242,7 +248,7 @@ export default function App() {
     setBusy((b) => ({ ...b, [index]: "Running…" }))
     try {
       const task = await runTask(job.id, index, job.draft.tasks[index])
-      setJob((j) => (j ? { ...j, draft: { ...j.draft, tasks: j.draft.tasks.map((t, i) => (i === index ? task : t)) } } : j))
+      setJob((j) => (j ? { ...j, draft: { ...j.draft, tasks: j.draft.tasks.map((t, i) => (i === index ? keepUploads(task, t) : t)) } } : j))
       if (render) setAutoMake(true) // the files already made should show the new output
     } catch (e) {
       if (!handleExpired(e)) setError((e as Error).message)
@@ -253,7 +259,7 @@ export default function App() {
 
   async function upload(index: number, list: FileList) {
     if (!job) return
-    setBusy((b) => ({ ...b, [index]: "Uploading…" }))
+    setUploading((u) => ({ ...u, [index]: true }))
     try {
       const names: string[] = []
       for (const f of Array.from(list)) names.push((await uploadImage(job.id, f)).name)
@@ -272,7 +278,7 @@ export default function App() {
     } catch (e) {
       if (!handleExpired(e)) setError((e as Error).message)
     } finally {
-      setBusy((b) => withoutKey(b, index))
+      setUploading((u) => withoutKey(u, index))
     }
   }
 
@@ -479,6 +485,7 @@ export default function App() {
               jobId={job.id}
               meta={meta}
               busy={writing ? runningNow : busy}
+              uploading={uploading}
               onChange={updateDraft}
               onRun={rerun}
               onUpload={upload}
@@ -627,4 +634,16 @@ function withoutKey<T>(record: Record<number, T>, key: number): Record<number, T
   const next = { ...record }
   delete next[key]
   return next
+}
+
+/** Screenshots the student added while a run was in flight must survive the run's result replacing the task. */
+function keepUploads<T extends Draft | Task>(next: T, current: T | null | undefined): T {
+  if (!current) return next
+  if ("tasks" in next && "tasks" in current) {
+    return { ...next, tasks: next.tasks.map((t, i) => keepUploads(t, current.tasks[i])) } as T
+  }
+  const a = next as Task
+  const b = current as Task
+  const extra = (b.images ?? []).filter((n) => !a.images.includes(n))
+  return extra.length ? ({ ...a, images: [...a.images, ...extra] } as T) : next
 }
