@@ -154,6 +154,12 @@ function TaskEditor(props: {
         </label>
       )}
 
+      {props.busy && (
+        <p className="hint" role="status">
+          Running your program for the output screenshot. This can take a few minutes. Please wait. You can add your own screenshot meanwhile.
+        </p>
+      )}
+
       <div className="task__actions">
         {runnable && (
           <button type="button" className="btn btn--secondary" onClick={props.onRun} disabled={props.busy}>

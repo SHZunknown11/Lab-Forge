@@ -473,6 +473,11 @@ export default function App() {
               Stop
             </button>
           )}
+          {writing && (
+            <p className="hint" role="status">
+              Getting the output screenshots can take a few minutes, especially for Java and Spring programs. Please wait, and keep this page open.
+            </p>
+          )}
           {error && (
             <p className="alert" role="alert">
               {error}
