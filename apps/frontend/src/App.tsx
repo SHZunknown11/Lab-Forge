@@ -77,6 +77,23 @@ export default function App() {
     if (job && meta && Date.now() - job.savedAt > meta.job_ttl_hours * 3600 * 1000) setJob(null)
   }, [job, meta, setJob])
 
+  // The server's disk is cleared on every update, so a report the browser remembers may be gone.
+  // Say so now, instead of leaving download buttons that return "file wasn't available".
+  const checkedJob = useRef("")
+  useEffect(() => {
+    if (!job || writing || checkedJob.current === job.id) return
+    checkedJob.current = job.id
+    fetch(`/api/jobs/${job.id}/alive`)
+      .then((r) => {
+        if (r.status === 404) {
+          setJob(null)
+          setRender(null)
+          setError("This report was cleared from the server when it was updated. Upload the sheet again to rebuild it.")
+        }
+      })
+      .catch(() => {})
+  }, [job, writing, setJob])
+
   const tpl = meta?.templates.find((t) => t.id === template)
   const ordered = useMemo(() => documentOrder(fields), [fields])
   const value = (label: string) => fields.find((f) => f.label.toLowerCase() === label)?.value.trim() ?? ""

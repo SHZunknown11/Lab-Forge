@@ -271,6 +271,13 @@ class RunRequest(BaseModel):
     task: Task
 
 
+@app.get("/api/jobs/{job_id}/alive")
+def job_alive(job_id: str):
+    """Lets the page find out whether a report it remembers is still on the server."""
+    _job(job_id)
+    return {"ok": True}
+
+
 @app.post("/api/jobs/{job_id}/run")
 def run_one(job_id: str, body: RunRequest, request: Request):
     job_dir = _job(job_id)
