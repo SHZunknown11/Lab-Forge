@@ -16,6 +16,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from pathlib import Path
+from typing import Annotated, Literal
 
 from dotenv import load_dotenv
 
@@ -39,16 +40,17 @@ _protect_secrets()
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
-from pydantic import BaseModel  # noqa: E402
+from pydantic import BaseModel, Field  # noqa: E402
 
-from core.activity import ActivityLog, task_summary, who_from_sheet  # noqa: E402
+from core.activity import ActivityLog, task_summary  # noqa: E402
 from core.ai.provider import AIError, DraftCache, get_provider, usage_summary  # noqa: E402
 from core.documents.pdf_converter import PdfConverter  # noqa: E402
 from core.documents.templates import DEFAULT_FIELDS, TEMPLATES  # noqa: E402
 from core.execution.runner import LANGUAGE_LABELS, CodeRunner, sandbox_report  # noqa: E402
 from core.ingestion.extract import UnsupportedFile, condense, extract_text  # noqa: E402
+from core.ingestion.header import read_header, strip_personal  # noqa: E402
 from core.pipeline.orchestrator import (  # noqa: E402
-    build_draft, job_file, job_path, new_job, purge_old_jobs, render_report, run_task,
+    JOB_ID, build_draft, job_file, job_path, new_job, purge_old_jobs, render_report, run_task,
 )
 from core.schemas import RenderRequest, Task  # noqa: E402
 
@@ -195,6 +197,8 @@ async def create_draft(
     if text.strip():
         raw = (raw + "\n\n" + text).strip() if raw else text
     sheet = condense(raw)
+    details = read_header(sheet)  # fills the student's form; never sent to the AI or the cache key
+    sheet = strip_personal(sheet)
     if len(sheet) < 30:
         raise HTTPException(422, "There isn't enough text in that sheet. Paste the experiment text instead.")
 
@@ -202,14 +206,14 @@ async def create_draft(
     language = language if language in LANGUAGE_LABELS or language == "auto" else "auto"
     subject = subject.strip()[:120]
     cache = DraftCache()
-    hit = not fresh and cache.get(DraftCache.key(sheet, language, subject)) is not None
+    hit = not fresh and cache.get(DraftCache.key(sheet, language)) is not None
     if not hit:
         limiter.check(ip, "ai", AI_DAILY, 86400)
 
     job_id, job_dir = new_job()
     (job_dir / "sheet.txt").write_text(sheet, encoding="utf-8")
 
-    name, uid = who_from_sheet(sheet)
+    name, uid = details.get("Student Name", ""), details.get("UID", "")
     started = time.monotonic()
 
     def produce(out: queue.Queue, stop: threading.Event):
@@ -239,7 +243,7 @@ async def create_draft(
     def stream():
         # Writing and compiling can go quiet for minutes on a small host; proxies drop an idle
         # response (the browser then keeps a draft with no output), so send a ping meanwhile.
-        yield json.dumps({"type": "job", "job": job_id}) + "\n"
+        yield json.dumps({"type": "job", "job": job_id, "details": details}) + "\n"
         events: queue.Queue = queue.Queue()
         stop = threading.Event()
         threading.Thread(target=produce, args=(events, stop), daemon=True).start()
@@ -297,6 +301,23 @@ async def upload_image(job_id: str, request: Request, file: UploadFile = File(..
     name = f"up_{uuid.uuid4().hex[:12]}.png"
     clean.save(job_dir / name, optimize=True)
     return {"name": name, "width": clean.width, "height": clean.height}
+
+
+class FeedbackRequest(BaseModel):
+    rating: Literal["up", "down"]
+    reasons: list[Annotated[str, Field(max_length=60)]] = Field(default_factory=list, max_length=8)
+    comment: str = Field(default="", max_length=1000)
+
+
+@app.post("/api/jobs/{job_id}/feedback")
+def feedback(job_id: str, body: FeedbackRequest, request: Request):
+    # The report's files may have expired by now; the vote still counts.
+    if not JOB_ID.match(job_id or ""):
+        raise HTTPException(404, "Unknown report.")
+    ip = client_ip(request)
+    limiter.check(ip, "feedback", 30, 3600)
+    activity.record("feedback", job_id, ip=ip, rating=body.rating, reasons=body.reasons, comment=body.comment.strip())
+    return {"ok": True}
 
 
 @app.post("/api/jobs/{job_id}/render")

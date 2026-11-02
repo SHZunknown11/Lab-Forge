@@ -11,9 +11,11 @@ import os
 import random
 import re
 import shutil
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
@@ -81,6 +83,21 @@ def purge_old_jobs(max_age_hours: float) -> int:
 
 # ── draft ──────────────────────────────────────────────────────────
 
+_writing_locks: dict[str, threading.Lock] = {}
+_writing_guard = threading.Lock()
+
+
+@contextmanager
+def _writing(key: str):
+    with _writing_guard:
+        lock = _writing_locks.setdefault(key, threading.Lock())
+    with lock:
+        yield
+    with _writing_guard:
+        if not lock.locked():
+            _writing_locks.pop(key, None)
+
+
 def build_draft(
     sheet: str,
     job_dir: Path,
@@ -97,17 +114,26 @@ def build_draft(
 
     offline = getattr(provider, "name", "") == "local"
     # Offline drafts get their own cache entries so they never stand in for real ones.
-    key = DraftCache.key(sheet, language, subject + ("|offline" if offline else ""))
+    key = DraftCache.key(sheet, language + ("|offline" if offline else ""))
     report = None if fresh else cache.get(key)
-    cached = report is not None
+    if report is None and not fresh:
+        # Classmates often send the same sheet within seconds: the first writes it, the rest wait and reuse it.
+        with _writing(key):
+            report = cache.get(key)
+            if report is None:
+                yield {"type": "stage", "stage": "write", "text": "Writing the report and programs"}
+                report = provider.generate(sheet, language, subject, 0)
+                cache.put(key, report)
+                cached = False
+            else:
+                cached = True
+    else:
+        cached = report is not None
+        if not cached:
+            yield {"type": "stage", "stage": "write", "text": "Writing the report and programs"}
+            report = provider.generate(sheet, language, subject, random.randint(1, 999))
     if cached:
         yield {"type": "stage", "stage": "write", "text": "Found this sheet already written, reusing it"}
-    else:
-        yield {"type": "stage", "stage": "write", "text": "Writing the report and programs"}
-        variant = random.randint(1, 999) if fresh else 0
-        report = provider.generate(sheet, language, subject, variant)
-        if not fresh:
-            cache.put(key, report)
 
     draft = to_draft(report)
     yield {"type": "draft", "draft": draft.model_dump()}

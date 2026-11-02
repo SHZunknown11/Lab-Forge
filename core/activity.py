@@ -10,22 +10,12 @@ from __future__ import annotations
 import json
 import os
 import queue
-import re
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TABLE = "labforge_activity"
-NAME = re.compile(r"^\s*(?:student\s*)?name\s*[:\-–]\s*(.{2,60}?)\s*$", re.IGNORECASE | re.MULTILINE)
-UID = re.compile(r"^\s*uid\s*[:\-–]?\s*([A-Za-z0-9]{4,20})\s*$", re.IGNORECASE | re.MULTILINE)
-
-
-def who_from_sheet(sheet: str) -> tuple[str, str]:
-    """The student name and UID a sheet carries in its header, if any."""
-    head = sheet[:1500]
-    name, uid = NAME.search(head), UID.search(head)
-    return (name.group(1).strip() if name else ""), (uid.group(1).upper() if uid else "")
 
 
 def task_summary(tasks: list) -> list[dict]:
@@ -135,7 +125,7 @@ def group_reports(rows: list[dict]) -> list[dict]:
         rep = jobs.setdefault(row["job"], {
             "job": row["job"], "ts": row["ts"], "updated": row["ts"], "name": "", "uid": "", "ip": "",
             "title": "", "subject": "", "language": "", "cached": False, "error": "", "tasks": [],
-            "seconds": None, "sheet": "", "downloads": 0, "warnings": [], "reruns": 0,
+            "seconds": None, "sheet": "", "downloads": 0, "warnings": [], "reruns": 0, "feedback": None,
         })
         rep["updated"] = row["ts"]
         for key in ("name", "uid", "ip", "title", "subject"):
@@ -155,7 +145,10 @@ def group_reports(rows: list[dict]) -> list[dict]:
             rep["warnings"] = row.get("warnings") or []
             if row.get("tasks"):
                 rep["tasks"] = row["tasks"]
+        elif kind == "feedback":  # the latest vote counts
+            rep["feedback"] = {k: row.get(k) for k in ("rating", "reasons", "comment")} | {"ts": row["ts"]}
     for rep in jobs.values():
         statuses = [t.get("status") for t in rep["tasks"]]
-        rep["issue"] = bool(rep["error"]) or any(s != "passed" for s in statuses) or not statuses
+        rep["issue"] = (bool(rep["error"]) or any(s != "passed" for s in statuses) or not statuses
+                        or (rep["feedback"] or {}).get("rating") == "down")
     return sorted(jobs.values(), key=lambda r: r["ts"], reverse=True)

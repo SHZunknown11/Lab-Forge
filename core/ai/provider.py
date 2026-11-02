@@ -82,9 +82,10 @@ class DraftCache:
         self.root = Path(root or os.environ.get("LABFORGE_CACHE_DIR", ROOT / "artifacts" / "cache" / "drafts"))
 
     @staticmethod
-    def key(sheet: str, language: str = "", subject: str = "", variant: int = 0) -> str:
+    def key(sheet: str, language: str = "", variant: int = 0) -> str:
+        """Sheet and language only: the subject a student types varies between classmates."""
         norm = re.sub(r"\s+", " ", sheet).strip().lower()
-        raw = "\x1f".join([PROMPT_VERSION, norm, (language or "").lower(), subject.strip().lower(), str(variant)])
+        raw = "\x1f".join([PROMPT_VERSION, norm, (language or "").lower(), str(variant)])
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:40]
 
     def get(self, key: str) -> AIReport | None:

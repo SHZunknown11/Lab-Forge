@@ -89,5 +89,14 @@ export const renderReport = (
     }),
   )
 
+export const sendFeedback = (job: string, body: { rating: "up" | "down"; reasons: string[]; comment: string }) =>
+  json<{ ok: boolean }>(
+    fetch(`/api/jobs/${job}/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  )
+
 export const fileUrl = (job: string, name: string, render?: string) =>
   render ? `/api/jobs/${job}/files/${render}/${encodeURIComponent(name)}` : `/api/jobs/${job}/files/${encodeURIComponent(name)}`

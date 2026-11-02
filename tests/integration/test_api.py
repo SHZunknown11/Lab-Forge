@@ -123,3 +123,20 @@ def test_activity_log_shows_who_made_the_report(client, monkeypatch, tmp_path):
     report = next(r for r in data["reports"] if r["job"] == job)
     assert report["name"] == "Asha" and report["uid"] == "24BCS1" and report["downloads"] == 1
     assert report["tasks"] and not report["issue"]
+
+
+def test_feedback_is_logged_and_shown_in_the_panel(client, monkeypatch, tmp_path):
+    from apps.api import main
+    from core.activity import ActivityLog
+
+    monkeypatch.setattr(main, "activity", ActivityLog(db_url="", path=tmp_path / "activity.jsonl"))
+    monkeypatch.setenv("LABFORGE_ADMIN_TOKEN", "secret-key")
+    job = "ab" * 16
+    assert client.post(f"/api/jobs/{job}/feedback", json={"rating": "meh"}).status_code == 422
+    assert client.post("/api/jobs/nope/feedback", json={"rating": "up"}).status_code == 404
+    res = client.post(f"/api/jobs/{job}/feedback",
+                      json={"rating": "down", "reasons": ["Output missing"], "comment": "Hard had no screenshot"})
+    assert res.status_code == 200
+    main.activity.flush()
+    report = client.get("/api/admin/activity", headers={"X-Admin-Token": "secret-key"}).json()["reports"][0]
+    assert report["feedback"]["rating"] == "down" and report["feedback"]["reasons"] == ["Output missing"]

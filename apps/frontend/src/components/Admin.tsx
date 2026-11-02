@@ -29,6 +29,7 @@ interface Report {
   warnings: string[]
   reruns: number
   issue: boolean
+  feedback: { rating: "up" | "down"; reasons: string[]; comment: string; ts: string } | null
 }
 
 const TOKEN_KEY = "lf.admin"
@@ -61,6 +62,7 @@ export default function Admin() {
   const [loading, setLoading] = useState(false)
   const [query, setQuery] = useState("")
   const [issuesOnly, setIssuesOnly] = useState(false)
+  const [vote, setVote] = useState<"" | "up" | "down" | "any">("")
   const [open, setOpen] = useState<string | null>(null)
 
   const load = useCallback(async () => {
@@ -99,9 +101,10 @@ export default function Admin() {
     return (reports ?? []).filter(
       (r) =>
         (!issuesOnly || r.issue) &&
+        (!vote || (vote === "any" ? !!r.feedback : r.feedback?.rating === vote)) &&
         (!q || [r.name, r.uid, r.title, r.subject, r.ip, r.job].some((v) => v.toLowerCase().includes(q))),
     )
-  }, [reports, query, issuesOnly])
+  }, [reports, query, issuesOnly, vote])
 
   if (!token) {
     return (
@@ -142,6 +145,8 @@ export default function Admin() {
   const total = reports?.length ?? 0
   const issues = reports?.filter((r) => r.issue).length ?? 0
   const downloaded = reports?.filter((r) => r.downloads > 0).length ?? 0
+  const ups = reports?.filter((r) => r.feedback?.rating === "up").length ?? 0
+  const downs = reports?.filter((r) => r.feedback?.rating === "down").length ?? 0
 
   return (
     <main className="admin">
@@ -168,6 +173,12 @@ export default function Admin() {
           <option value={7}>7 days</option>
           <option value={30}>30 days</option>
         </select>
+        <select value={vote} onChange={(e) => setVote(e.target.value as typeof vote)} aria-label="Feedback">
+          <option value="">All feedback</option>
+          <option value="down">Thumbs down</option>
+          <option value="up">Thumbs up</option>
+          <option value="any">Any feedback</option>
+        </select>
         <label className="check">
           <input type="checkbox" checked={issuesOnly} onChange={(e) => setIssuesOnly(e.target.checked)} />
           Issues only
@@ -179,7 +190,7 @@ export default function Admin() {
       {reports && (
         <p className="admin__stats">
           <b>{total}</b> reports · <b className={issues ? "admin__bad" : ""}>{issues}</b> with issues ·{" "}
-          <b>{downloaded}</b> downloaded
+          <b>{downloaded}</b> downloaded · <b>{ups}</b> 👍 · <b className={downs ? "admin__bad" : ""}>{downs}</b> 👎
         </p>
       )}
 
@@ -205,6 +216,12 @@ export default function Admin() {
                     <i key={i} className={`admin__dot admin__dot--${t.status}`} title={`${t.title}: ${STATUS_LABEL[t.status] ?? t.status}`} />
                   ))}
                   {r.error && <i className="admin__dot admin__dot--failed" title={r.error} />}
+                  {r.feedback && (
+                    <span className={`admin__vote admin__vote--${r.feedback.rating}`}
+                      title={r.feedback.rating === "up" ? "Thumbs up" : `Thumbs down: ${[...r.feedback.reasons, r.feedback.comment].filter(Boolean).join(". ")}`}>
+                      {r.feedback.rating === "up" ? "👍" : "👎"}
+                    </span>
+                  )}
                 </span>
                 <span className={`admin__pill${r.issue ? " admin__pill--issue" : ""}`}>{r.issue ? "Issue" : "OK"}</span>
               </button>
@@ -212,6 +229,13 @@ export default function Admin() {
               {isOpen && (
                 <div className="admin__detail">
                   {r.error && <p className="alert">{r.error}</p>}
+                  {r.feedback && (
+                    <div className={`admin__feedback admin__feedback--${r.feedback.rating}`}>
+                      <b>{r.feedback.rating === "up" ? "👍 The student said it was right" : "👎 The student said something was wrong"}</b>
+                      {r.feedback.reasons?.length > 0 && <p>{r.feedback.reasons.join(" · ")}</p>}
+                      {r.feedback.comment && <p>“{r.feedback.comment}”</p>}
+                    </div>
+                  )}
                   {r.tasks.map((t, i) => (
                     <div key={i} className={`admin__task admin__task--${t.status}`}>
                       <div className="admin__taskhead">

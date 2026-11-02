@@ -3,6 +3,7 @@ import { ApiError, createDraft, fileUrl, getMeta, renderReport, runTask, uploadI
 import { AdSlot } from "./components/AdSlot"
 import { InfoPage, type Route } from "./components/InfoPage"
 import { Paper, type Progress } from "./components/Paper"
+import { Feedback } from "./components/Feedback"
 import { Review } from "./components/Review"
 import { defaultFields, documentOrder, today, uid, useStored, type RecentSubject } from "./store"
 import type { Draft, Field, Meta, RenderResult, SavedJob } from "./types"
@@ -47,6 +48,7 @@ export default function App() {
   const [renderError, setRenderError] = useState("")
   const [view, setView] = useState<"edit" | "preview">("edit")
   const [revealKey, setRevealKey] = useState("start")
+  const [autoMake, setAutoMake] = useState(false)
   const abort = useRef<AbortController | null>(null)
 
   useEffect(() => {
@@ -83,6 +85,25 @@ export default function App() {
 
   const setField = (id: string, patch: Partial<Field>) =>
     setFields((fs) => fs.map((f) => (f.id === id ? { ...f, ...patch } : f)))
+
+  /** Blank fields take what the sheet's own header says (name, UID, subject, ...). The date stays today's. */
+  const fillFromSheet = (details: Record<string, string>) => {
+    const found = Object.fromEntries(Object.entries(details).map(([k, v]) => [k.toLowerCase(), v]))
+    setFields((fs) =>
+      fs.map((f) => {
+        const label = f.label.trim().toLowerCase()
+        return label !== "date" && !f.value.trim() && found[label] ? { ...f, value: found[label] } : f
+      }),
+    )
+  }
+
+  // Once the programs have run (or been re-run), make the Word and PDF files without being asked.
+  useEffect(() => {
+    if (!autoMake || !job || writing || rendering || Object.keys(busy).length) return
+    setAutoMake(false)
+    void makeFiles()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoMake, job, writing, rendering, busy])
 
   const focusField = (id: string) => {
     setView("edit")
@@ -143,7 +164,10 @@ export default function App() {
         await createDraft(
           form,
           (e) => {
-            if (e.type === "job") jobId = e.job
+            if (e.type === "job") {
+              jobId = e.job
+              if (e.details) fillFromSheet(e.details)
+            }
             else if (e.type === "stage") setProgress((p) => ({ ...p, stages: [...p.stages, { stage: e.stage, text: e.text }] }))
             else if (e.type === "draft") {
               draft = e.draft
@@ -177,6 +201,7 @@ export default function App() {
         setProgress((p) => ({ ...p, stages: [...p.stages, { stage: "run", text: "Running the programs again" }] }))
         if (!(await runAll(jobId, draft))) return
       } else if (dropped) throw dropped
+      setAutoMake(true) // nothing left for the student to click: make the Word and PDF files now
       if (subject) {
         const code = value("subject code")
         setRecent((r) => [{ name: subject, code }, ...r.filter((s) => s.name !== subject)].slice(0, 8))
@@ -218,6 +243,7 @@ export default function App() {
     try {
       const task = await runTask(job.id, index, job.draft.tasks[index])
       setJob((j) => (j ? { ...j, draft: { ...j.draft, tasks: j.draft.tasks.map((t, i) => (i === index ? task : t)) } } : j))
+      if (render) setAutoMake(true) // the files already made should show the new output
     } catch (e) {
       if (!handleExpired(e)) setError((e as Error).message)
     } finally {
@@ -242,6 +268,7 @@ export default function App() {
             }
           : j,
       )
+      if (render) setAutoMake(true)
     } catch (e) {
       if (!handleExpired(e)) setError((e as Error).message)
     } finally {
@@ -443,7 +470,7 @@ export default function App() {
         {job && meta && (
           <section className="step" aria-labelledby="s3">
             <h2 id="s3">
-              <span className="step__n">3</span>Check the report
+              <span className="step__n">3</span>Check the report (optional)
             </h2>
             {job.cached && <p className="hint">This sheet was written before, so it came back instantly.</p>}
             <Review
@@ -519,6 +546,7 @@ export default function App() {
                     </ol>
                   </>
                 )}
+                <Feedback key={job.id} jobId={job.id} />
               </div>
             )}
             <button type="button" className="link link--muted" onClick={() => {

@@ -627,6 +627,107 @@ textarea.code {
   opacity: 0.6;
 }
 
+/* ── feedback ───────────────────────────────────────────────────── */
+
+.feedback {
+  display: grid;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--rule);
+}
+
+.feedback--done {
+  margin: 0;
+  color: var(--ok);
+  font-size: var(--s1);
+}
+
+.feedback__ask {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--s1);
+  color: var(--muted);
+}
+
+.feedback__ask span {
+  margin-right: auto;
+}
+
+.feedback__thumb {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--field);
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--graphite);
+  cursor: pointer;
+}
+
+.feedback__thumb:hover {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.feedback__thumb.is-on {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
+}
+
+.feedback__why {
+  display: grid;
+  gap: 10px;
+}
+
+.feedback__why fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.feedback__why legend {
+  font-size: var(--s1);
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.feedback__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border: 1px solid var(--field);
+  border-radius: 99px;
+  font-size: var(--s1);
+  cursor: pointer;
+  background: var(--paper);
+}
+
+.chip input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.chip:has(input:focus-visible) {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.chip.is-on {
+  border-color: var(--margin);
+  background: var(--margin-wash);
+  color: #7d1a20;
+}
+
 .pages {
   list-style: none;
   margin: 0;
@@ -1159,6 +1260,27 @@ textarea.code {
 
 .admin__dot--failed {
   background: var(--margin);
+}
+
+.admin__vote {
+  margin-left: 4px;
+  font-size: 14px;
+  line-height: 10px;
+}
+
+.admin__feedback {
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: #e6f2eb;
+}
+
+.admin__feedback--down {
+  background: var(--margin-wash);
+}
+
+.admin__feedback p {
+  margin: 4px 0 0;
+  font-size: var(--s1);
 }
 
 .admin__pill {

@@ -62,7 +62,8 @@ export interface RenderResult {
 }
 
 export type DraftEvent =
-  | { type: "job"; job: string }
+  | { type: "job"; job: string; details?: Record<string, string> }
+  | { type: "ping" }
   | { type: "stage"; stage: string; text: string }
   | { type: "draft"; draft: Draft }
   | { type: "task"; index: number; title: string; status: RunStatus; note: string }
