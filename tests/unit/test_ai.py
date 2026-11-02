@@ -113,3 +113,40 @@ def test_gpt_oss_gets_low_reasoning_effort(monkeypatch):
     monkeypatch.setattr("core.ai.provider.log_usage", lambda *a, **k: {})
     OpenAICompatProvider("groq", client=httpx.Client(transport=httpx.MockTransport(handler))).generate("Aim: x")
     assert sent["reasoning_effort"] == "low" and sent["model"] == "openai/gpt-oss-120b"
+
+
+class _Fake:
+    configured = True
+    model = "m"
+
+    def __init__(self, name, delay=0.0, fail=False):
+        self.name, self.delay, self.fail = name, delay, fail
+
+    def fix(self, items):
+        import time
+
+        time.sleep(self.delay)
+        if self.fail:
+            raise RetryableAIError(f"{self.name} down")
+        return self.name
+
+
+def test_slow_provider_is_raced_by_the_next_one(monkeypatch):
+    import time
+
+    from core.ai import provider as mod
+
+    monkeypatch.setattr(mod, "HEDGE_SECONDS", 0.2)
+    chain = ProviderChain([_Fake("slow", delay=3), _Fake("fast", delay=0.1)])
+    start = time.monotonic()
+    assert chain.fix([]) == "fast"
+    assert time.monotonic() - start < 1.5
+
+
+def test_failed_provider_hands_over_at_once_and_all_failing_is_an_error(monkeypatch):
+    from core.ai import provider as mod
+
+    monkeypatch.setattr(mod, "HEDGE_SECONDS", 30)
+    assert ProviderChain([_Fake("a", fail=True), _Fake("b")]).fix([]) == "b"
+    with pytest.raises(AIError):
+        ProviderChain([_Fake("a", fail=True), _Fake("b", fail=True)]).fix([])

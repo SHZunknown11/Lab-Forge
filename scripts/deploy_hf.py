@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INCLUDE = ("Dockerfile", ".dockerignore", "pyproject.toml", "main.py", "apps/api/", "apps/frontend/",
            "core/", "scripts/", "templates/", "config/subjects.json", "config/student_profile.example.json")
 SECRETS = ("GEMINI_API_KEY", "CLOUDFLARE_AI_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY", "OPENROUTER_API_KEY",
-           "MISTRAL_API_KEY", "GITHUB_MODELS_TOKEN", "LABFORGE_ADMIN_TOKEN")
+           "MISTRAL_API_KEY", "GITHUB_MODELS_TOKEN", "LABFORGE_ADMIN_TOKEN", "LABFORGE_LOG_DB_URL")
 VARIABLES = ("AI_PROVIDERS", "GEMINI_MODEL", "GEMINI_FALLBACK_MODELS", "GEMINI_MAX_ATTEMPTS", "GEMINI_THINKING",
              "CLOUDFLARE_BASE_URL", "CLOUDFLARE_MODEL", "GROQ_MODEL", "OPENROUTER_MODEL", "AI_REASONING_EFFORT",
              "LABFORGE_AI_DAILY_LIMIT", "VITE_ADSENSE_CLIENT", "VITE_ADSENSE_SLOT_RAIL", "VITE_ADSENSE_SLOT_BENCH")

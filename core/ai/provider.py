@@ -26,6 +26,7 @@ import os
 import re
 import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,10 @@ import httpx
 from core.schemas import AIFile, AIFixes, AIReport, AITask
 
 ROOT = Path(__file__).resolve().parents[2]
+# A stalled provider shouldn't hold a student up: each call gets a deadline, and when the first
+# provider is slow the next one starts too (first good answer wins).
+TIMEOUT_SECONDS = float(os.environ.get("AI_TIMEOUT_SECONDS", "40") or 40)
+HEDGE_SECONDS = float(os.environ.get("AI_HEDGE_SECONDS", "12") or 0)
 PROMPT_VERSION = "6"
 
 SYSTEM_PROMPT = """You turn a university lab experiment sheet into the content of a lab report. Reply with JSON only.
@@ -209,7 +214,10 @@ class GeminiProvider:
         if self._client is None:
             from google import genai
 
-            self._client = genai.Client(api_key=self.api_key)
+            from google.genai import types
+
+            self._client = genai.Client(api_key=self.api_key,
+                                        http_options=types.HttpOptions(timeout=int(TIMEOUT_SECONDS * 1000)))
         return self._client
 
     def generate(self, sheet: str, language: str = "", subject: str = "", variant: int = 0) -> AIReport:
@@ -339,7 +347,7 @@ class OpenAICompatProvider:
         headers = {"Authorization": f"Bearer {self.api_key}"}
         if self.name == "openrouter":
             headers["X-Title"] = "LabForge"
-        client = self.client or httpx.Client(timeout=httpx.Timeout(120, connect=10))
+        client = self.client or httpx.Client(timeout=httpx.Timeout(TIMEOUT_SECONDS, connect=10))
         try:
             resp = None
             for attempt in (1, 2, 3):
@@ -397,14 +405,36 @@ class ProviderChain:
         return self._each(lambda p: p.fix(items))
 
     def _each(self, call):
+        """Providers in order; a slow one gets company after HEDGE_SECONDS, a failed one is replaced at once."""
         if not self.providers:
             raise AIError("No AI provider is configured on the server, so new sheets can't be written yet.")
-        errors = []
-        for provider in self.providers:
-            try:
-                return call(provider)
-            except RetryableAIError as exc:
-                errors.append(str(exc))
+        errors: list[str] = []
+        waiting = list(self.providers)
+        running: dict = {}
+        pool = ThreadPoolExecutor(max_workers=len(self.providers), thread_name_prefix="ai")
+
+        def start():
+            provider = waiting.pop(0)
+            running[pool.submit(call, provider)] = provider
+
+        try:
+            start()
+            while running:
+                done, _ = wait(running, timeout=HEDGE_SECONDS if waiting and HEDGE_SECONDS else None,
+                               return_when=FIRST_COMPLETED)
+                if not done:
+                    start()  # the leader is slow: race the next provider too
+                    continue
+                for fut in done:
+                    running.pop(fut)
+                    try:
+                        return fut.result()
+                    except RetryableAIError as exc:
+                        errors.append(str(exc))
+                        if waiting:
+                            start()
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)  # a slower provider's late answer is dropped
         print("[ai] all providers failed: " + " | ".join(errors))
         raise AIError("Every AI service is busy or out of free quota right now. Try again in a few minutes.")
 
