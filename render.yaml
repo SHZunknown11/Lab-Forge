@@ -23,6 +23,9 @@ services:
         value: gemini,cloudflare,groq,cerebras,openrouter,mistral,github
       - key: LABFORGE_ADMIN_TOKEN
         generateValue: true
+      # Postgres URL for the /admin activity log (the free disk is wiped on every restart).
+      - key: LABFORGE_LOG_DB_URL
+        sync: false
       # The free instance has 512 MB and a tenth of a CPU: one heavy process at a time,
       # five times the usual timeouts.
       - key: LABFORGE_MAX_PARALLEL_RUNS

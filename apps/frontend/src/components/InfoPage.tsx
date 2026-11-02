@@ -56,7 +56,7 @@ function Privacy({ ttl }: { ttl: number }) {
   return (
     <>
       <h1>Privacy</h1>
-      <p>Last updated 1 November 2026.</p>
+      <p>Last updated 2 November 2026.</p>
       <h2>What stays on your device</h2>
       <p>
         Your name, UID, branch, section, semester, subjects and your latest report are saved in this browser's local
@@ -72,6 +72,11 @@ function Privacy({ ttl }: { ttl: number }) {
       </p>
       <p>
         We keep a count of requests per IP address for a day to stop abuse. We don't sell data or build profiles.
+      </p>
+      <p>
+        So we can fix reports that come out wrong, we keep a private activity log for 30 days: the name and UID on your
+        sheet or report, your IP address, the experiment, and whether each program ran. Only the site's maintainer can
+        see it.
       </p>
       <h2>Advertising</h2>
       <p>

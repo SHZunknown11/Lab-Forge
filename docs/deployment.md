@@ -86,6 +86,14 @@ input, cached, output and thinking tokens per model. Typical numbers with
 Gemini Flash: a new three-program sheet costs about 2k input and 2k output
 tokens; an uploaded-before sheet costs nothing.
 
+## Activity panel
+
+Open `/admin` and enter `LABFORGE_ADMIN_TOKEN`. Each report shows the student's name and UID
+(from the sheet header, then from the fields when they download), the experiment, and every
+program's result with the reason it didn't run. Set `LABFORGE_LOG_DB_URL` to a Postgres URL
+(a free Neon database works) so the log survives restarts; without it the log lives in
+`artifacts/activity.jsonl`. Rows older than `LABFORGE_LOG_DAYS` (30) are deleted.
+
 ## Ads (Google AdSense)
 
 1. Get approved: AdSense wants a live domain with real content. The About and

@@ -2,6 +2,7 @@
 
     python scripts/setup_runtime.py            # Python libs + Node packages
     python scripts/setup_runtime.py --mongo    # also fetch a MongoDB server binary
+    python scripts/setup_runtime.py --spring   # also fetch Spring Boot jars (needs a JDK)
 
 Python: numpy, matplotlib, pillow, opencv-python-headless, scikit-image, pandas
 Node:   react, react-dom, react-router-dom, esbuild, express, mongoose, bcryptjs,
@@ -10,6 +11,8 @@ Node:   react, react-dom, react-router-dom, esbuild, express, mongoose, bcryptjs
 MongoDB: only mongod is kept from the official archive. The runner points
 mongodb-memory-server at it, so Mongoose experiments run against a throwaway
 database.
+Spring:  Spring Boot (web, data-jpa, validation) and H2 jars in .runtime/java/spring, resolved
+with Maven (downloaded for the occasion when it isn't installed, then removed).
 """
 from __future__ import annotations
 
@@ -33,6 +36,26 @@ NODE_PACKAGES = [
     "mongodb-memory-server-core",
 ]
 MONGO_VERSION = "8.0.4"
+SPRING_BOOT_VERSION = "3.5.16"
+MAVEN_VERSION = "3.9.16"
+SPRING_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>{version}</version>
+  </parent>
+  <groupId>labforge</groupId>
+  <artifactId>spring-runtime</artifactId>
+  <version>1</version>
+  <dependencies>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-data-jpa</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-validation</artifactId></dependency>
+    <dependency><groupId>com.h2database</groupId><artifactId>h2</artifactId></dependency>
+  </dependencies>
+</project>
+"""
 
 
 def python_runtime() -> None:
@@ -131,14 +154,48 @@ def mongo() -> Path:
     return target
 
 
+def spring() -> Path:
+    """Spring Boot + H2 jars for Java programs that import org.springframework / jakarta."""
+    target = RUNTIME / "java" / "spring"
+    if (target / "VERSION").exists() and (target / "VERSION").read_text().strip() == SPRING_BOOT_VERSION:
+        return target
+    work = RUNTIME / "java" / "build"
+    work.mkdir(parents=True, exist_ok=True)
+    (work / "pom.xml").write_text(SPRING_POM.format(version=SPRING_BOOT_VERSION), encoding="utf-8")
+    mvn = shutil.which("mvn")
+    if not mvn:
+        base = f"https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/{MAVEN_VERSION}"
+        archive = work / f"apache-maven-{MAVEN_VERSION}-bin.zip"
+        if not archive.exists():
+            print("Downloading Maven…")
+            download(f"{base}/{archive.name}", archive)
+        with zipfile.ZipFile(archive) as zf:
+            zf.extractall(work)
+        home = work / f"apache-maven-{MAVEN_VERSION}"
+        mvn = str(home / "bin" / ("mvn.cmd" if sys.platform == "win32" else "mvn"))
+        if sys.platform != "win32":
+            Path(mvn).chmod(0o755)
+    shutil.rmtree(target, ignore_errors=True)
+    subprocess.check_call([mvn, "-q", "-B", f"-Dmaven.repo.local={work / 'm2'}", "dependency:copy-dependencies",
+                           f"-DoutputDirectory={target}", "-DincludeScope=runtime"],
+                          cwd=work, shell=sys.platform == "win32")
+    shutil.rmtree(work, ignore_errors=True)
+    (target / "VERSION").write_text(SPRING_BOOT_VERSION)
+    return target
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mongo", action="store_true", help="also download a MongoDB server binary")
     parser.add_argument("--only-mongo", action="store_true")
+    parser.add_argument("--spring", action="store_true", help="also fetch Spring Boot jars (needs a JDK)")
+    parser.add_argument("--only-spring", action="store_true")
     args = parser.parse_args()
-    if not args.only_mongo:
+    if not (args.only_mongo or args.only_spring):
         python_runtime()
         node_runtime()
     if args.mongo or args.only_mongo:
         print("mongod:", mongo())
+    if args.spring or args.only_spring:
+        print("spring:", spring())
     print("Runtime ready in", RUNTIME)

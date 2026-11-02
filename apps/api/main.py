@@ -9,6 +9,7 @@ import hmac
 import io
 import json
 import os
+import queue
 import sys
 import threading
 import time
@@ -40,6 +41,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse  # n
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
+from core.activity import ActivityLog, task_summary, who_from_sheet  # noqa: E402
 from core.ai.provider import AIError, DraftCache, get_provider, usage_summary  # noqa: E402
 from core.documents.pdf_converter import PdfConverter  # noqa: E402
 from core.documents.templates import DEFAULT_FIELDS, TEMPLATES  # noqa: E402
@@ -62,9 +64,11 @@ TRUST_PROXY = int(os.environ.get("LABFORGE_TRUST_PROXY", "0") or 0)
 # Or a header the edge sets and visitors can't forge, e.g. true-client-ip on Render (Cloudflare).
 CLIENT_IP_HEADER = os.environ.get("LABFORGE_CLIENT_IP_HEADER", "").strip().lower()
 DIST = ROOT / "apps" / "frontend" / "dist"
+STREAM_PING_SECONDS = 10
 
 app = FastAPI(title="LabForge", docs_url=None, redoc_url=None)
 runner = CodeRunner()
+activity = ActivityLog()
 
 
 # ── limits ─────────────────────────────────────────────────────────
@@ -205,16 +209,52 @@ async def create_draft(
     job_id, job_dir = new_job()
     (job_dir / "sheet.txt").write_text(sheet, encoding="utf-8")
 
-    def stream():
-        yield json.dumps({"type": "job", "job": job_id}) + "\n"
+    name, uid = who_from_sheet(sheet)
+    started = time.monotonic()
+
+    def produce(out: queue.Queue, stop: threading.Event):
+        log = {"name": name, "uid": uid, "ip": ip, "subject": subject, "language": language,
+               "sheet": sheet[:6000], "error": "", "tasks": [], "cached": False}
         try:
             for event in build_draft(sheet, job_dir, language, subject, fresh, cache=cache, runner=runner):
-                yield json.dumps(event) + "\n"
+                out.put(event)
+                if event["type"] in ("draft", "done"):
+                    log["title"] = event["draft"].get("title", "")
+                    log["tasks"] = task_summary(event["draft"]["tasks"])
+                    log["cached"] = event.get("cached", False)
+                if stop.is_set():  # the student left; don't keep compiling for nobody
+                    log["error"] = "Left before the programs finished."
+                    return
         except AIError as exc:
-            yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
+            log["error"] = str(exc)
+            out.put({"type": "error", "message": str(exc)})
         except Exception as exc:  # noqa: BLE001
             print(f"[draft] {type(exc).__name__}: {exc}")
-            yield json.dumps({"type": "error", "message": "Something went wrong while writing. Try again."}) + "\n"
+            log["error"] = f"{type(exc).__name__}: {exc}"
+            out.put({"type": "error", "message": "Something went wrong while writing. Try again."})
+        finally:
+            out.put(None)
+            activity.record("draft", job_id, seconds=round(time.monotonic() - started), **log)
+
+    def stream():
+        # Writing and compiling can go quiet for minutes on a small host; proxies drop an idle
+        # response (the browser then keeps a draft with no output), so send a ping meanwhile.
+        yield json.dumps({"type": "job", "job": job_id}) + "\n"
+        events: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        threading.Thread(target=produce, args=(events, stop), daemon=True).start()
+        try:
+            while True:
+                try:
+                    event = events.get(timeout=STREAM_PING_SECONDS)
+                except queue.Empty:
+                    yield json.dumps({"type": "ping"}) + "\n"
+                    continue
+                if event is None:
+                    return
+                yield json.dumps(event) + "\n"
+        finally:
+            stop.set()
 
     return StreamingResponse(stream(), media_type="application/x-ndjson",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
@@ -230,7 +270,10 @@ def run_one(job_id: str, body: RunRequest, request: Request):
     job_dir = _job(job_id)
     limiter.check(client_ip(request), "runs", 60, 3600)
     task = body.task
-    run_task(job_dir, max(0, min(body.index, 50)), task, runner)
+    index = max(0, min(body.index, 50))
+    run_task(job_dir, index, task, runner)
+    activity.record("run", job_id, index=index, ip=client_ip(request), title=task.title, status=task.status,
+                    note=task.note[:300], output=task.output[-600:])
     return task
 
 
@@ -262,7 +305,13 @@ def render(job_id: str, body: RenderRequest, request: Request):
     limiter.check(client_ip(request), "renders", 60, 3600)
     if body.template not in TEMPLATES:
         body.template = "cu-cse"
-    return render_report(job_dir, body)
+    result = render_report(job_dir, body)
+    values = {f.label.strip().lower(): f.value.strip() for f in body.fields}
+    activity.record("render", job_id, ip=client_ip(request), name=values.get("student name", ""),
+                    uid=values.get("uid", ""), subject=values.get("subject name", ""), title=body.draft.title,
+                    template=body.template, warnings=result["warnings"],
+                    tasks=task_summary([t.model_dump() for t in body.draft.tasks]))
+    return result
 
 
 @app.get("/api/jobs/{job_id}/files/{name}")
@@ -299,6 +348,17 @@ def _admin(token: str) -> None:
 def admin_usage(token: str = "", days: int = 1):
     _admin(token)
     return {"days": days, "by_model": usage_summary(days)}
+
+
+@app.get("/api/admin/activity")
+def admin_activity(request: Request, days: int = 7):
+    _admin(request.headers.get("x-admin-token", ""))
+    days = max(1, min(days, 90))
+    try:
+        reports = activity.reports(days)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(503, f"The activity log couldn't be read: {type(exc).__name__}") from exc
+    return {"days": days, "storage": activity.storage, "reports": reports}
 
 
 @app.get("/api/admin/status")

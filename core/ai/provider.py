@@ -35,7 +35,7 @@ import httpx
 from core.schemas import AIFile, AIFixes, AIReport, AITask
 
 ROOT = Path(__file__).resolve().parents[2]
-PROMPT_VERSION = "5"
+PROMPT_VERSION = "6"
 
 SYSTEM_PROMPT = """You turn a university lab experiment sheet into the content of a lab report. Reply with JSON only.
 - One task per problem, level or part the sheet lists (e.g. Easy, Medium, Hard), in order; a sheet with a single practical question is one task. Keep every requirement; add none.
@@ -45,9 +45,10 @@ SYSTEM_PROMPT = """You turn a university lab experiment sheet into the content o
 - If the sheet gives code for a task, reuse it and fix only real errors. Otherwise write complete, correct code a student could explain in a viva: clear names, brief comments, no over-engineering.
 - language: one of java, python, c, cpp, javascript (Node.js), react, html, matlab, sql, r, shell, other; use what the sheet asks for.
 - files: usually one {name, code}. Use several only when the project needs them (React components, Express routes). Names like SquareRoot.java, main.py, App.jsx, server.js, index.html.
-- Programs run unattended: no reading files, no external network, no GUI windows, no command-line arguments. Java: no package line; exactly one public class per file.
+- Programs run unattended: no reading files, no external network, no GUI windows, no command-line arguments. Java: Java 17 (no Java 21+ features such as record patterns or pattern matching in switch); no package line; exactly one public class per file.
 - If the task reads user input, read it normally (Scanner, input(), cin) and put realistic demo input in stdin, one value per line, covering the cases the task mentions. Otherwise stdin is "".
 - Printed output must show the required behaviour, including handled error cases.
+- Spring Boot (when the sheet uses Spring/JPA/Hibernate): language java; Spring Boot 3 with spring-boot-starter-web, data-jpa, validation and an H2 in-memory database are available, nothing else (no Lombok, no application.properties: rely on defaults). One @SpringBootApplication class with main; a file per public class like the sheet, or one file with the other classes non-public. Print every result from a CommandLineRunner. For REST endpoints, call them from the runner with RestTemplate on "http://localhost:" + env.getProperty("local.server.port") (Environment env, read inside run), print status and body, and catch HttpStatusCodeException to print error responses.
 - Node.js: CommonJS require; only express, mongoose, bcryptjs, jsonwebtoken, cors, uuid, axios, dotenv, body-parser, morgan, express-validator. A server must start, call its own routes with fetch, print each response, then close and exit. MongoDB: mongoose.connect(process.env.MONGO_URI || "mongodb://127.0.0.1:27017/<db>") and disconnect at the end.
 - React: function components, App.jsx with a default export; only react, react-dom, react-router-dom and imported .css files; no network calls on load.
 - HTML: self-contained pages, CSS and JS inline or in sibling files, no external links.

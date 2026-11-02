@@ -135,32 +135,48 @@ export default function App() {
     let jobId = ""
     let cached = false
     let failed = false
+    let draft: Draft | null = null
+    let finished = false
     try {
-      await createDraft(
-        form,
-        (e) => {
-          if (e.type === "job") jobId = e.job
-          else if (e.type === "stage") setProgress((p) => ({ ...p, stages: [...p.stages, { stage: e.stage, text: e.text }] }))
-          else if (e.type === "draft") {
-            setRevealKey(jobId)
-            setProgress((p) => ({ ...p, tasks: Object.fromEntries(e.draft.tasks.map((_, i) => [i, "running"])) }))
-            setJob({ id: jobId, draft: e.draft, savedAt: Date.now(), cached: false })
-          } else if (e.type === "task") setProgress((p) => ({ ...p, tasks: { ...p.tasks, [e.index]: e.status } }))
-          else if (e.type === "done") {
-            cached = e.cached
-            setProgress((p) => ({ ...p, tasks: {} }))
-            setJob({ id: jobId, draft: e.draft, savedAt: Date.now(), cached: e.cached })
-          } else if (e.type === "error") {
-            failed = true
-            setError(e.message)
-          }
-        },
-        ctl.signal,
-      )
+      let dropped: unknown = null
+      try {
+        await createDraft(
+          form,
+          (e) => {
+            if (e.type === "job") jobId = e.job
+            else if (e.type === "stage") setProgress((p) => ({ ...p, stages: [...p.stages, { stage: e.stage, text: e.text }] }))
+            else if (e.type === "draft") {
+              draft = e.draft
+              setRevealKey(jobId)
+              setProgress((p) => ({ ...p, tasks: Object.fromEntries(e.draft.tasks.map((_, i) => [i, "running"])) }))
+              setJob({ id: jobId, draft: e.draft, savedAt: Date.now(), cached: false })
+            } else if (e.type === "task") setProgress((p) => ({ ...p, tasks: { ...p.tasks, [e.index]: e.status } }))
+            else if (e.type === "done") {
+              finished = true
+              cached = e.cached
+              setProgress((p) => ({ ...p, tasks: {} }))
+              setJob({ id: jobId, draft: e.draft, savedAt: Date.now(), cached: e.cached })
+            } else if (e.type === "error") {
+              failed = true
+              setError(e.message)
+            }
+          },
+          ctl.signal,
+        )
+      } catch (e) {
+        if ((e as Error).name === "AbortError") throw e
+        dropped = e
+      }
       if (failed) {
         setView("edit") // the message is in the sidebar
         return
       }
+      if (draft && !finished) {
+        // The connection dropped after the draft but before the run results arrived.
+        // Run the programs again here so no task is left without output.
+        setProgress((p) => ({ ...p, stages: [...p.stages, { stage: "run", text: "Running the programs again" }] }))
+        if (!(await runAll(jobId, draft))) return
+      } else if (dropped) throw dropped
       if (subject) {
         const code = value("subject code")
         setRecent((r) => [{ name: subject, code }, ...r.filter((s) => s.name !== subject)].slice(0, 8))
@@ -175,6 +191,25 @@ export default function App() {
       setWriting(false)
       setProgress((p) => ({ ...p, tasks: {} }))
     }
+  }
+
+  /** Runs every task of `draft` on the server, one at a time. False when the job expired. */
+  async function runAll(jobId: string, draft: Draft): Promise<boolean> {
+    for (let i = 0; i < draft.tasks.length; i++) {
+      if (!draft.tasks[i].files.some((f) => f.code.trim())) continue
+      setProgress((p) => ({ ...p, tasks: { ...p.tasks, [i]: "running" } }))
+      try {
+        const task = await runTask(jobId, i, draft.tasks[i])
+        setJob((j) => (j && j.id === jobId
+          ? { ...j, draft: { ...j.draft, tasks: j.draft.tasks.map((t, k) => (k === i ? task : t)) }, savedAt: Date.now() }
+          : j))
+        setProgress((p) => ({ ...p, tasks: { ...p.tasks, [i]: task.status } }))
+      } catch (e) {
+        if (handleExpired(e)) return false
+        throw e
+      }
+    }
+    return true
   }
 
   async function rerun(index: number) {

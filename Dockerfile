@@ -39,9 +39,9 @@ COPY apps/api ./apps/api
 RUN pip install ".[server]"
 
 # Libraries student programs may import (numpy, matplotlib, OpenCV, scikit-image, pandas;
-# React, Express, Mongoose, ...) and a MongoDB server binary, all under /app/.runtime.
+# React, Express, Mongoose, ...), Spring Boot + H2 jars and a MongoDB server binary, all under /app/.runtime.
 COPY scripts ./scripts
-RUN python scripts/setup_runtime.py --mongo \
+RUN python scripts/setup_runtime.py --mongo --spring \
     && MPLCONFIGDIR=/app/.runtime/mplconfig .runtime/python/bin/python -c "import matplotlib.pyplot" \
     && rm -rf /root/.npm /root/.cache
 

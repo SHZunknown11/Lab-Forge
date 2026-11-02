@@ -20,7 +20,7 @@ from typing import Iterator
 from core.ai.provider import AIError, DraftCache, get_provider
 from core.documents.generator import ReportWriter, safe_filename
 from core.documents.pdf_converter import PdfConversionError, PdfConverter
-from core.execution.runner import CodeRunner, prepare_java, unlink_node_modules
+from core.execution.runner import SPRING_IMPORT, CodeRunner, prepare_java, unlink_node_modules
 from core.schemas import AIFile, AIReport, AITask, CodeFile, RenderRequest, ReportDraft, RunResult, Task
 from core.screenshots.terminal_renderer import render_console
 from core.validation.pdf_renderer import PdfPreviewRenderer
@@ -268,6 +268,8 @@ def render_report(job_dir: Path, req: RenderRequest) -> dict:
 def _command(task: Task) -> str:
     lang = task.language
     names = [f.name for f in task.files]
+    if lang == "java" and any(SPRING_IMPORT.search(f.code) for f in task.files):
+        return "mvn spring-boot:run"
     if lang == "java" and task.files:
         main = next((f.code for f in task.files if "void main" in f.code), task.files[0].code)
         return f"java {prepare_java(main)[1]}"

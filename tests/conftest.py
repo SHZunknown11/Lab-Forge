@@ -13,10 +13,14 @@ os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
 @pytest.fixture(autouse=True)
 def isolated_storage(tmp_path, monkeypatch):
-    """Jobs, cache and usage log go to a temp folder, never into artifacts/."""
+    """Jobs, cache, usage and activity logs go to a temp folder, never into artifacts/."""
+    from core.activity import ActivityLog
     from core.pipeline import orchestrator
 
     monkeypatch.setattr(orchestrator, "JOBS_ROOT", tmp_path / "jobs")
+    monkeypatch.setenv("LABFORGE_LOG_DB_URL", "")
+    if "apps.api.main" in sys.modules:
+        monkeypatch.setattr(sys.modules["apps.api.main"], "activity", ActivityLog(path=tmp_path / "activity.jsonl"))
     monkeypatch.setenv("LABFORGE_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setenv("LABFORGE_USAGE_LOG", str(tmp_path / "usage.jsonl"))
     monkeypatch.setenv("AI_MODE", "local")

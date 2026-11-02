@@ -1,4 +1,6 @@
 import java.io.BufferedInputStream;
+import java.io.FileDescriptor;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
@@ -55,6 +57,9 @@ public class LFLauncher {
     }
 
     public static void main(String[] args) throws Exception {
+        // Unbuffered: a prompt printed before a timeout kill still reaches the console.
+        System.setOut(new PrintStream(new FileOutputStream(FileDescriptor.out), true, "UTF-8"));
+        System.setErr(new PrintStream(new FileOutputStream(FileDescriptor.err), true, "UTF-8"));
         System.setIn(new EchoIn(new BufferedInputStream(System.in), System.out));
         Class<?> target = Class.forName(args[0]);
         Method main = target.getMethod("main", String[].class);
@@ -71,6 +76,9 @@ public class LFLauncher {
             System.exit(1);
         }
         System.out.flush();
+        if (Boolean.getBoolean("lf.exit")) {
+            System.exit(0); // Spring Boot: the runners are done; don't wait on the web server
+        }
     }
 
     private static void trim(Throwable t) {

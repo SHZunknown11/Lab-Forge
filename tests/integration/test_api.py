@@ -103,3 +103,23 @@ def test_client_ip_ignores_spoofed_forwarded_for(monkeypatch):
 def test_health_and_hidden_admin(client):
     assert client.get("/api/health").json() == {"ok": True}
     assert client.get("/api/admin/status?token=x").status_code == 404
+
+
+def test_activity_log_shows_who_made_the_report(client, monkeypatch, tmp_path):
+    from apps.api import main
+    from core.activity import ActivityLog
+
+    monkeypatch.setattr(main, "activity", ActivityLog(db_url="", path=tmp_path / "activity.jsonl"))
+    monkeypatch.setenv("LABFORGE_ADMIN_TOKEN", "secret-key")
+    events = draft(client)
+    job, done = events[0]["job"], events[-1]
+    fields = [{"label": "Student Name", "value": "Asha"}, {"label": "UID", "value": "24BCS1"}]
+    client.post(f"/api/jobs/{job}/render", json={"draft": done["draft"], "fields": fields, "template": "plain", "pdf": False})
+    main.activity.flush()
+
+    assert client.get("/api/admin/activity").status_code == 404
+    assert client.get("/api/admin/activity", headers={"X-Admin-Token": "wrong"}).status_code == 404
+    data = client.get("/api/admin/activity", headers={"X-Admin-Token": "secret-key"}).json()
+    report = next(r for r in data["reports"] if r["job"] == job)
+    assert report["name"] == "Asha" and report["uid"] == "24BCS1" and report["downloads"] == 1
+    assert report["tasks"] and not report["issue"]

@@ -37,6 +37,8 @@ from core.schemas import CodeFile, RunResult
 ROOT = Path(__file__).resolve().parents[2]
 HARNESS = Path(__file__).parent / "harness"
 NODE_RUNTIME = Path(os.environ.get("EXEC_NODE_MODULES", ROOT / ".runtime" / "node" / "node_modules"))
+SPRING_LIBS = Path(os.environ.get("EXEC_SPRING_LIBS", ROOT / ".runtime" / "java" / "spring"))
+SPRING_IMPORT = re.compile(r"^\s*import\s+(?:static\s+)?(?:org\.springframework|jakarta)\.", re.MULTILINE)
 MAX_OUTPUT_CHARS = 20_000
 POSIX = os.name != "nt"
 # Heavy child processes (programs, Chrome, LibreOffice) share these slots; 1 on a 512 MB host.
@@ -210,6 +212,8 @@ class CodeRunner:
         if re.search(r"\bimport\s+javax?\.(swing|awt)\b|\bextends\s+(JFrame|Applet|Application)\b", joined):
             return RunResult(status="not_run", note=(
                 "This program opens a window, so it can't be captured here. Add a screenshot of it."))
+        if SPRING_IMPORT.search(joined) and (SPRING_LIBS / "VERSION").exists():
+            return self._run_spring(files, stdin, wd)
         sources: list[str] = []
         entry = None
         if len(files) == 1:
@@ -244,6 +248,58 @@ class CodeRunner:
                           "-Xss8m", "-cp", ".", "LFLauncher", entry], wd, stdin, "java")
         if "HeadlessException" in run.output:
             return RunResult(status="not_run", note="This program opens a window. Add a screenshot of it.")
+        return self._result(run)
+
+    def _run_spring(self, files: list[CodeFile], stdin: str, wd: Path) -> RunResult:
+        """Spring Boot with the jars from setup_runtime.py --spring: all files in one package
+        (a default-package component scan would crawl every jar), runners print, then exit."""
+        packages = set()
+        for f in files:
+            packages.update(re.findall(r"^\s*package\s+([\w.]+)\s*;", f.code, re.MULTILINE))
+        own = "|".join(re.escape(p) for p in sorted(packages, key=len, reverse=True))
+        sources, entry, fallback = [], None, None
+        for f in files:
+            code = re.sub(r"^\s*package\s+[\w.]+\s*;\s*$", "", f.code, flags=re.MULTILINE)
+            if own:  # imports between the student's packages: now one package
+                code = re.sub(rf"^\s*import\s+(?:static\s+)?(?:{own})\.[\w.*]+\s*;\s*$", "", code, flags=re.MULTILINE)
+            if len(files) == 1:
+                code = prepare_java(code)[0]  # one public class
+            public = re.search(r"^public\s+(?:final\s+|abstract\s+)*(?:class|record|enum|interface)\s+(\w+)",
+                               code, re.MULTILINE)
+            name = f"{public.group(1)}.java" if public else (
+                Path(f.name).name if f.name.endswith(".java") else f"{Path(f.name).stem}.java")
+            (wd / name).write_text("package lfapp;\n" + code, encoding="utf-8")
+            sources.append(name)
+            bare = _blank_literals(code)
+            if entry is None and "@SpringBootApplication" in bare:
+                entry = prepare_java(code)[1]
+            if fallback is None and re.search(r"static\s+(?:public\s+)?void\s+main\s*\(", bare):
+                fallback = prepare_java(code)[1]
+        entry = entry or fallback
+        if not entry:
+            return RunResult(status="failed", retryable=True, note=(
+                "There's no class with a main method. Add a @SpringBootApplication class that calls SpringApplication.run."))
+        shutil.copy(HARNESS / "LFLauncher.java", wd / "LFLauncher.java")
+        cp = os.pathsep.join([str(SPRING_LIBS / "*"), "."])
+        comp = self._exec(["javac", *(f"-J{o}" for o in self.java_opts), "--release", "17", "-parameters",
+                           "-encoding", "UTF-8", "-nowarn", "-cp", cp, "-d", ".", *sources, "LFLauncher.java"],
+                          wd, "", "java", timeout=max(self.timeout, scaled(60)))
+        if comp.code != 0:
+            missing = re.search(r"package ((?!java\.)[\w.]+) does not exist", comp.output)
+            if missing and not missing.group(1).startswith(("org.springframework", "jakarta")):
+                return RunResult(status="not_run", note=(
+                    f"Needs the {missing.group(1)} library, which isn't installed here. "
+                    "Add a screenshot of the output from your machine."))
+            return RunResult(status="failed", output=_clip(comp.output), retryable=True,
+                             note="The program didn't compile.")
+        quiet = [
+            "-Dspring.main.banner-mode=off", "-Dlogging.level.root=WARN", "-Dspring.output.ansi.enabled=never",
+            "-Dserver.port=0", "-Dspring.jmx.enabled=false", "-Dspring.jpa.open-in-view=false",
+            "-Dlf.exit=true",  # the launcher exits once main returns, so a web server doesn't keep it alive
+        ]
+        run = self._exec(["java", *self.java_opts, *quiet, "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8",
+                          "-Dstderr.encoding=UTF-8", "-cp", cp, "LFLauncher", f"lfapp.{entry}"],
+                         wd, stdin, "java", timeout=self.timeout + scaled(60))
         return self._result(run)
 
     def _run_python(self, files: list[CodeFile], stdin: str, wd: Path) -> RunResult:
@@ -434,9 +490,15 @@ def prepare_java(code: str) -> tuple[str, str, str | None]:
     Returns (code, entry class name, public class name or None).
     """
     code = re.sub(r"^\s*package\s+[\w.]+\s*;\s*$", "", code, flags=re.MULTILINE).strip() + "\n"
+    # Only top-level types: a nested `static class Node` declared above main isn't the entry.
+    bare = _blank_literals(code)
+    depth, depths = 0, []
+    for ch in bare:
+        depths.append(depth)
+        depth += (ch == "{") - (ch == "}")
     classes = [(m.start(), m.group(1)) for m in
-               re.finditer(r"\b(?:class|record|enum|interface)\s+([A-Z_a-z]\w*)", code)]
-    main_at = re.search(r"\bstatic\s+(?:public\s+)?void\s+main\s*\(", code)
+               re.finditer(r"\b(?:class|record|enum|interface)\s+([A-Z_a-z]\w*)", bare) if depths[m.start()] == 0]
+    main_at = re.search(r"\bstatic\s+(?:public\s+)?void\s+main\s*\(", bare)
     entry = None
     if main_at:
         before = [name for pos, name in classes if pos < main_at.start()]
@@ -453,6 +515,12 @@ def prepare_java(code: str) -> tuple[str, str, str | None]:
         code = re.sub(rf"^(public\s+)abstract\s+(class\s+{entry}\b)", r"\1\2", code, flags=re.MULTILINE)
     public = entry if entry in publics else None
     return code, entry, public
+
+
+def _blank_literals(code: str) -> str:
+    """`code` with comments, strings and char literals turned into spaces (same length)."""
+    return re.sub(r'//[^\n]*|/\*.*?\*/|"""(?:.|\n)*?"""|"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'',
+                  lambda m: re.sub(r"[^\n]", " ", m.group(0)), code, flags=re.DOTALL)
 
 
 def _pick(paths: list[str], preferred: tuple[str, ...], fallback_test) -> str:

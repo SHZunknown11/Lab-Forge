@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from core.execution.runner import CodeRunner, prepare_java, safe_rel
+from core.execution.runner import SPRING_LIBS, CodeRunner, prepare_java, safe_rel
 from core.schemas import CodeFile
 
 runner = CodeRunner()
@@ -73,6 +73,52 @@ def test_prepare_java_keeps_one_public_class():
     fixed, entry, public = prepare_java(code)
     assert entry == "App" and public == "App"
     assert "package" not in fixed and "public class Helper" not in fixed
+
+
+def test_prepare_java_entry_ignores_nested_types_above_main():
+    code = ("public class Bank {\n    // class Fake {\n    static class Account { int bal; }\n"
+            "    record Txn(String kind) {}\n    public static void main(String[] a) { System.out.println(\"class X {\"); }\n}\n")
+    _, entry, public = prepare_java(code)
+    assert entry == "Bank" and public == "Bank"
+
+
+@needs_java
+def test_java_nested_class_before_main_runs(tmp_path):
+    code = ("public class Main {\n    static class Node { int v; Node(int v) { this.v = v; } }\n"
+            "    public static void main(String[] args) { System.out.println(new Node(7).v); }\n}\n")
+    result = runner.run("java", [CodeFile(name="Main.java", code=code)], "", tmp_path)
+    assert result.status == "passed" and result.output == "7"
+
+
+@needs_java
+def test_java_output_survives_a_timeout(tmp_path):
+    code = 'public class Spin { public static void main(String[] a) { System.out.print("Started"); while (true) {} } }'
+    result = CodeRunner(timeout_seconds=3).run("java", [CodeFile(name="Spin.java", code=code)], "", tmp_path)
+    assert result.status == "failed" and "Started" in result.output
+
+
+SPRING_APP = """package com.demo;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.stereotype.Component;
+import org.springframework.web.bind.annotation.*;
+@SpringBootApplication
+public class DemoApplication {
+    public static void main(String[] args) { SpringApplication.run(DemoApplication.class, args); }
+}
+@RestController class Hello { @GetMapping("/hi") String hi(@RequestParam String name) { return "Hi " + name; } }
+@Component class Runner implements CommandLineRunner {
+    public void run(String... args) { System.out.println("started"); }
+}
+"""
+
+
+@needs_java
+@pytest.mark.skipif(not (SPRING_LIBS / "VERSION").exists(), reason="run setup_runtime.py --spring")
+def test_spring_boot_web_app_runs_and_exits(tmp_path):
+    result = CodeRunner(timeout_seconds=60).run("java", [CodeFile(name="DemoApplication.java", code=SPRING_APP)], "", tmp_path)
+    assert result.status == "passed" and result.output == "started"
 
 
 @pytest.mark.parametrize("name,expected", [
