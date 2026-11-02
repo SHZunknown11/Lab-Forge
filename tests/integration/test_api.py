@@ -140,3 +140,22 @@ def test_feedback_is_logged_and_shown_in_the_panel(client, monkeypatch, tmp_path
     main.activity.flush()
     report = client.get("/api/admin/activity", headers={"X-Admin-Token": "secret-key"}).json()["reports"][0]
     assert report["feedback"]["rating"] == "down" and report["feedback"]["reasons"] == ["Output missing"]
+
+
+def test_requests_with_the_admin_key_are_not_logged(client, monkeypatch, tmp_path):
+    from apps.api import main
+    from core.activity import ActivityLog
+
+    monkeypatch.setattr(main, "activity", ActivityLog(db_url="", path=tmp_path / "activity.jsonl"))
+    monkeypatch.setenv("LABFORGE_ADMIN_TOKEN", "secret-key")
+    owner = {"X-Admin-Token": "secret-key"}
+    with open("examples/source-notes.md", "rb") as fh:
+        res = client.post("/api/drafts", files={"file": ("sheet.md", fh, "text/markdown")},
+                          data={"language": "auto"}, headers=owner)
+    job = json.loads(res.text.splitlines()[0])["job"]
+    client.post(f"/api/jobs/{job}/feedback", json={"rating": "up"}, headers=owner)
+    client.post(f"/api/jobs/{job}/feedback", json={"rating": "up"}, headers={"X-Admin-Token": "guess"})
+    main.activity.flush()
+    reports = client.get("/api/admin/activity", headers=owner).json()["reports"]
+    assert [r["feedback"]["rating"] for r in reports] == ["up"]  # only the request without the right key
+    assert reports[0]["tasks"] == []  # its draft was the owner's, so it wasn't logged

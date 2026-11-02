@@ -151,7 +151,9 @@ def main() -> int:
             return 1
         time.sleep(20)
     print(f"Live: {url}")
-    return subprocess.call([sys.executable, str(ROOT / "scripts" / "smoke_test.py"), url, "--ai"])
+    # The admin key keeps the smoke test's reports out of the site's activity log.
+    smoke_env = {**os.environ, "LABFORGE_ADMIN_TOKEN": env.get("LABFORGE_ADMIN_TOKEN", "")}
+    return subprocess.call([sys.executable, str(ROOT / "scripts" / "smoke_test.py"), url, "--ai"], env=smoke_env)
 
 
 if __name__ == "__main__":

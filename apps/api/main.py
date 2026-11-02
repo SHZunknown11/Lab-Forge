@@ -179,6 +179,7 @@ async def create_draft(
 ):
     _maybe_purge()
     ip = client_ip(request)
+    owner = _is_owner(request)
     limiter.check(ip, "drafts", 30, 3600)
     raw = ""
     previous = job_path(from_job) if from_job else None
@@ -238,7 +239,8 @@ async def create_draft(
             out.put({"type": "error", "message": "Something went wrong while writing. Try again."})
         finally:
             out.put(None)
-            activity.record("draft", job_id, seconds=round(time.monotonic() - started), **log)
+            if not owner:
+                activity.record("draft", job_id, seconds=round(time.monotonic() - started), **log)
 
     def stream():
         # Writing and compiling can go quiet for minutes on a small host; proxies drop an idle
@@ -276,8 +278,9 @@ def run_one(job_id: str, body: RunRequest, request: Request):
     task = body.task
     index = max(0, min(body.index, 50))
     run_task(job_dir, index, task, runner)
-    activity.record("run", job_id, index=index, ip=client_ip(request), title=task.title, status=task.status,
-                    note=task.note[:300], output=task.output[-600:])
+    if not _is_owner(request):
+        activity.record("run", job_id, index=index, ip=client_ip(request), title=task.title, status=task.status,
+                        note=task.note[:300], output=task.output[-600:])
     return task
 
 
@@ -316,7 +319,9 @@ def feedback(job_id: str, body: FeedbackRequest, request: Request):
         raise HTTPException(404, "Unknown report.")
     ip = client_ip(request)
     limiter.check(ip, "feedback", 30, 3600)
-    activity.record("feedback", job_id, ip=ip, rating=body.rating, reasons=body.reasons, comment=body.comment.strip())
+    if not _is_owner(request):
+        activity.record("feedback", job_id, ip=ip, rating=body.rating, reasons=body.reasons,
+                        comment=body.comment.strip())
     return {"ok": True}
 
 
@@ -328,10 +333,11 @@ def render(job_id: str, body: RenderRequest, request: Request):
         body.template = "cu-cse"
     result = render_report(job_dir, body)
     values = {f.label.strip().lower(): f.value.strip() for f in body.fields}
-    activity.record("render", job_id, ip=client_ip(request), name=values.get("student name", ""),
-                    uid=values.get("uid", ""), subject=values.get("subject name", ""), title=body.draft.title,
-                    template=body.template, warnings=result["warnings"],
-                    tasks=task_summary([t.model_dump() for t in body.draft.tasks]))
+    if not _is_owner(request):
+        activity.record("render", job_id, ip=client_ip(request), name=values.get("student name", ""),
+                        uid=values.get("uid", ""), subject=values.get("subject name", ""), title=body.draft.title,
+                        template=body.template, warnings=result["warnings"],
+                        tasks=task_summary([t.model_dump() for t in body.draft.tasks]))
     return result
 
 
@@ -357,6 +363,13 @@ def _send(path: Path | None, download: bool = False):
 @app.get("/api/health")
 def health():
     return {"ok": True}
+
+
+def _is_owner(request: Request) -> bool:
+    """Requests carrying the admin key (the deploy smoke test, the owner's own checks) aren't logged."""
+    expected = os.environ.get("LABFORGE_ADMIN_TOKEN", "")
+    given = request.headers.get("x-admin-token", "")
+    return bool(expected and given) and hmac.compare_digest(given.encode(), expected.encode())
 
 
 def _admin(token: str) -> None:

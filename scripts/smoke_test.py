@@ -6,11 +6,13 @@
 Uploads a sheet that already contains its code (served offline or from the cache),
 runs one program per runtime (Java, Python + matplotlib, OpenCV, C, Node, Express,
 Mongoose, React, HTML), then renders the report to Word and PDF. Exits 1 on any failure.
-Uses only the standard library so it runs anywhere.
+Uses only the standard library so it runs anywhere. With LABFORGE_ADMIN_TOKEN set (the deploy
+scripts set it) every request carries it, so the site's activity log skips these test reports.
 """
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -90,10 +92,13 @@ class Smoke:
     def __init__(self, base: str):
         self.base = base.rstrip("/")
         self.failures: list[str] = []
+        token = os.environ.get("LABFORGE_ADMIN_TOKEN", "")
+        self.owner = {"X-Admin-Token": token} if token else {}
 
     def call(self, method: str, path: str, body: bytes | None = None, headers: dict | None = None,
              timeout: float = 600) -> tuple[int, bytes]:
-        req = urllib.request.Request(self.base + path, data=body, method=method, headers=headers or {})
+        req = urllib.request.Request(self.base + path, data=body, method=method,
+                                     headers={**self.owner, **(headers or {})})
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return resp.status, resp.read()
