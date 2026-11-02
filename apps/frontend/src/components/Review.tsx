@@ -8,6 +8,7 @@ interface Props {
   meta: Meta
   busy: Record<number, string>
   uploading: Record<number, boolean>
+  live: Record<number, string>
   onChange: (draft: Draft) => void
   onRun: (index: number) => void
   onUpload: (index: number, files: FileList) => void
@@ -21,7 +22,7 @@ const STATUS: Record<string, string> = {
   not_run: "Needs your screenshot",
 }
 
-export function Review({ draft, jobId, meta, busy, uploading, onChange, onRun, onUpload, onRewrite, rewriting }: Props) {
+export function Review({ draft, jobId, meta, busy, uploading, live, onChange, onRun, onUpload, onRewrite, rewriting }: Props) {
   const [open, setOpen] = useState<number | null>(() => {
     const firstProblem = draft.tasks.findIndex((t) => t.status !== "passed")
     return firstProblem >= 0 ? firstProblem : null
@@ -48,7 +49,7 @@ export function Review({ draft, jobId, meta, busy, uploading, onChange, onRun, o
 
       <ol className="tasks">
         {draft.tasks.map((t, i) => {
-          const status = busy[i] ? "running" : t.status
+          const status = busy[i] ? "running" : (live[i] ?? t.status)
           const expanded = open === i
           return (
             <li key={i} className={`task task--${status}`}>
@@ -59,7 +60,7 @@ export function Review({ draft, jobId, meta, busy, uploading, onChange, onRun, o
                 onClick={() => setOpen(expanded ? null : i)}
               >
                 <span className="task__name">{t.title || `Task ${i + 1}`}</span>
-                <span className="task__status">{busy[i] ? busy[i] : STATUS[t.status]}</span>
+                <span className="task__status">{busy[i] ? busy[i] : STATUS[live[i] ?? t.status]}</span>
               </button>
               {t.note && !busy[i] && <p className="task__note">{t.note}</p>}
               {expanded && (

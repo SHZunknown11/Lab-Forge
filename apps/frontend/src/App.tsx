@@ -325,6 +325,10 @@ export default function App() {
   const experiment = fields.filter((f) => f.group === "experiment")
   const needsScreenshot = job?.draft.tasks.filter((t) => !t.output.trim() && t.images.length === 0).length ?? 0
   const blanks = ordered.filter((f) => f.label.trim() && !f.value.trim()).map((f) => f.label)
+  // While the report is being written, the draft isn't updated yet: show each finished task's real result.
+  const finishedNow: Record<number, string> = Object.fromEntries(
+    Object.entries(progress.tasks).filter(([, st]) => st !== "running"),
+  )
   const runningNow: Record<number, string> = Object.fromEntries(
     Object.entries(progress.tasks)
       .filter(([, s]) => s === "running")
@@ -508,6 +512,7 @@ export default function App() {
               meta={meta}
               busy={writing ? runningNow : busy}
               uploading={uploading}
+              live={writing ? finishedNow : {}}
               onChange={updateDraft}
               onRun={rerun}
               onUpload={upload}

@@ -178,7 +178,9 @@ class CodeRunner:
                 "javascript": node,
                 "c": shutil.which("gcc") is not None,
                 "cpp": shutil.which("g++") is not None,
+                "shell": shutil.which("bash") is not None,
             }
+        caps["sql"] = caps.get("python", False)  # runs on SQLite through the bundled Python
         chrome = find_chrome() is not None
         caps["html"] = chrome
         caps["react"] = chrome and node and (NODE_RUNTIME / "esbuild").exists() and (NODE_RUNTIME / "react").exists()
@@ -324,6 +326,23 @@ class CodeRunner:
         result = self._result(run)
         result.figures = sorted(str(p) for p in Path(wd / entry).parent.glob("figure_*.png"))
         return result
+
+    def _run_sql(self, files: list[CodeFile], stdin: str, wd: Path) -> RunResult:
+        paths = self._write(files, wd)
+        shutil.copy(HARNESS / "lf_sql.py", wd / "lf_sql.py")
+        # One script: the files are run in order, so a schema file followed by queries still works.
+        (wd / "all.sql").write_text("\n".join(f.code for f in files), encoding="utf-8")
+        exe = self.python if self.backend == "local" else "python"
+        run = self._exec([exe, "-u", "lf_sql.py", "all.sql"], wd, "", "python")
+        result = self._result(run)
+        if result.status == "failed" and "ERROR:" in run.output:
+            result.note = "A statement failed. SQLite runs this one, so MySQL-only syntax can differ; check the error."
+        return result
+
+    def _run_shell(self, files: list[CodeFile], stdin: str, wd: Path) -> RunResult:
+        paths = self._write(files, wd)
+        entry = _pick(paths, ("script.sh", "main.sh", "run.sh"), lambda p: True)
+        return self._result(self._exec(["bash", entry], wd, stdin, "shell"))
 
     def _run_javascript(self, files: list[CodeFile], stdin: str, wd: Path) -> RunResult:
         code = "\n".join(f.code for f in files if not f.name.endswith(".json"))
