@@ -37,8 +37,9 @@ from core.schemas import AIFile, AIFixes, AIReport, AITask
 
 ROOT = Path(__file__).resolve().parents[2]
 # A stalled provider shouldn't hold a student up: each call gets a deadline, and when the first
-# provider is slow the next one starts too (first good answer wins).
-TIMEOUT_SECONDS = float(os.environ.get("AI_TIMEOUT_SECONDS", "40") or 40)
+# provider is slow the next one starts too (first good answer wins). The deadline is generous
+# because it only bites when no faster provider answers: Workers AI needs ~35 s for a full sheet.
+TIMEOUT_SECONDS = float(os.environ.get("AI_TIMEOUT_SECONDS", "90") or 90)
 HEDGE_SECONDS = float(os.environ.get("AI_HEDGE_SECONDS", "12") or 0)
 PROMPT_VERSION = "6"
 
