@@ -1,5 +1,6 @@
 from docx import Document
 from docx.oxml.ns import qn
+from docx.shared import Pt
 
 from core.documents.generator import ReportWriter, comment_line
 from core.schemas import CodeFile, MetaField, ReportDraft, Task
@@ -71,3 +72,26 @@ def test_comment_syntax_follows_the_file():
 def test_console_render_size(tmp_path):
     w, h = render_console("line\n" * 5, tmp_path / "o.png", command="java Main")
     assert w >= 1040 and h > 200
+
+
+def test_wrapped_code_lines_keep_their_indentation(tmp_path):
+    code = "class A {\n    void run() {\n        System.out.println(1);\n    }\n}"
+    t = task(files=[CodeFile(name="A.java", code=code)])
+    t.language = "java"
+    draft = ReportDraft(title="Experiment 2", aim="x", tasks=[t])
+    out = ReportWriter().write("plain", tmp_path / "r.docx", FIELDS, draft, [[]])
+    paras = {p.text: p.paragraph_format for p in Document(str(out)).paragraphs}
+    outer, inner = paras["class A {"], paras["System.out.println(1);"]
+    # Each line starts at its own indentation; a wrapped remainder hangs 4 characters further in.
+    assert inner.left_indent - outer.left_indent == Pt(6 * 8)
+    assert inner.first_line_indent == outer.first_line_indent == -Pt(6 * 4)
+
+
+def test_long_output_is_cut_to_one_page():
+    from core.screenshots.terminal_renderer import PAGE_LINES, fit_output
+
+    out = fit_output("\n".join(f"row {i}" for i in range(500)))
+    rows = out.split("\n")
+    assert len(rows) == PAGE_LINES and rows[0] == "row 0" and rows[-1] == "row 499"
+    assert any("more lines" in r for r in rows)
+    assert fit_output("short\noutput") == "short\noutput"

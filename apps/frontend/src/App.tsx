@@ -123,6 +123,14 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoMake, job, writing, rendering, busy, uploading])
 
+  // Edits on the page or in the form: once the student pauses, the downloads catch up with them.
+  useEffect(() => {
+    if (!stale || writing || rendering || Object.keys(busy).length || Object.keys(uploading).length) return
+    const timer = setTimeout(() => void makeFiles(), 2500)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stale, currentKey, writing, rendering, busy, uploading])
+
   const focusField = (id: string) => {
     setView("edit")
     requestAnimationFrame(() => {
@@ -134,6 +142,10 @@ export default function App() {
 
   const updateDraft = useCallback(
     (draft: Draft) => setJob((j) => (j ? { ...j, draft, savedAt: Date.now() } : j)),
+    [setJob],
+  )
+  const changeDraft = useCallback(
+    (change: (draft: Draft) => Draft) => setJob((j) => (j ? { ...j, draft: change(j.draft), savedAt: Date.now() } : j)),
     [setJob],
   )
 
@@ -616,6 +628,7 @@ export default function App() {
             signature={signature}
             revealKey={revealKey}
             onFieldClick={focusField}
+            onChange={job && !writing ? changeDraft : undefined}
             onDropFile={(f) => {
               setSheetFile(f)
               setPasteMode(false)

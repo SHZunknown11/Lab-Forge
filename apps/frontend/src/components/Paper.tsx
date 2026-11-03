@@ -18,6 +18,8 @@ interface Props {
   revealKey: string
   onFieldClick: (id: string) => void
   onDropFile: (file: File) => void
+  /** When set, the text on the page can be edited in place; the Word and PDF files follow. */
+  onChange?: (update: (draft: Draft) => Draft) => void
 }
 
 const PAGE_WIDTH = 816 // 8.5 in at 96 dpi
@@ -43,6 +45,8 @@ export function Paper(props: Props) {
 
   const title = draft?.title || (draft?.experiment_no ? `Experiment ${draft.experiment_no}` : "Experiment")
   const plain = template?.id === "plain"
+  // Each edit is applied to the latest draft, so two quick edits never overwrite each other.
+  const edit = draft && props.onChange ? (patch: Partial<Draft>) => props.onChange!((d) => ({ ...d, ...patch })) : null
 
   const drop = (e: DragEvent) => {
     e.preventDefault()
@@ -53,6 +57,7 @@ export function Paper(props: Props) {
 
   return (
     <div className="paper-holder" ref={holder}>
+      {edit && <p className="paper-hint">Click any text on the page to change it. Your Word and PDF files update to match.</p>}
       <article
         className={`paper${plain ? " paper--plain" : ""}${dragging ? " paper--drag" : ""}`}
         style={{ zoom }}
@@ -65,7 +70,9 @@ export function Paper(props: Props) {
         onDrop={drop}
       >
         {template?.header_image && <img className="paper__header" src={template.header_image} alt="" />}
-        <h2 className="paper__title">{title}</h2>
+        <h2 className="paper__title">
+          <Text value={title} edit={edit && ((v) => edit({ title: v }))} label="Report title" />
+        </h2>
         <dl className="paper__meta">
           {pairs.map((pair, i) => (
             <div className="paper__meta-row" key={i}>
@@ -79,7 +86,7 @@ export function Paper(props: Props) {
                       onClick={() => props.onFieldClick(f.id)}
                       aria-label={`Edit ${f.label}`}
                     >
-                      {f.value || " "}
+                      {f.value || " "}
                     </button>
                   </dd>
                 </div>
@@ -89,7 +96,7 @@ export function Paper(props: Props) {
         </dl>
 
         {draft ? (
-          <Body {...props} draft={draft} />
+          <Body {...props} draft={draft} edit={edit} update={props.onChange ?? null} />
         ) : writing ? (
           <div className="paper__writing" role="status" aria-live="polite">
             {props.progress.stages.map((s, i) => (
@@ -109,25 +116,36 @@ export function Paper(props: Props) {
   )
 }
 
-function Body({ draft, jobId, progress, signature, revealKey, template }: Props & { draft: Draft }) {
+type Edit = ((patch: Partial<Draft>) => void) | null
+type EditTask = ((change: (task: Task) => Task) => void) | null
+
+function Body({ draft, jobId, progress, signature, revealKey, template, edit, update }: Props & {
+  draft: Draft
+  edit: Edit
+  update: ((change: (draft: Draft) => Draft) => void) | null
+}) {
   const single = draft.tasks.length === 1
   const outcomes = draft.learning_outcomes.filter((o) => o.trim())
   const upper = template?.id !== "plain"
+  const editTask = (i: number): EditTask =>
+    update && ((change) => update((d) => ({ ...d, tasks: d.tasks.map((t, k) => (k === i ? change(t) : t)) })))
+  const editOutcomes = edit && ((items: string[]) => edit({ learning_outcomes: items }))
   let n = 1
   return (
     <div className="paper__body reveal" key={revealKey}>
       {single ? (
         <>
-          {draft.aim && <Item n={n++} label="Aim" text={draft.aim} top />}
+          {draft.aim && <Item n={n++} label="Aim" text={draft.aim} top edit={edit && ((v) => edit({ aim: v }))} />}
           {draft.tasks[0].problem && distinct(draft.tasks[0].problem, draft.aim) && (
-            <Item n={n++} label="Problem Statement" text={draft.tasks[0].problem} top />
+            <Item n={n++} label="Problem Statement" text={draft.tasks[0].problem} top
+              edit={editTask(0) && ((v) => editTask(0)!((t) => ({ ...t, problem: v })))} />
           )}
           <TaskBody task={draft.tasks[0]} index={0} start={n} top codeLabel="Implementation/Code"
-            jobId={jobId} running={progress.tasks[0] === "running"} signature={signature} />
+            jobId={jobId} running={progress.tasks[0] === "running"} signature={signature} edit={editTask(0)} />
           {outcomes.length > 0 && (
             <>
               <Item n={n + countBody(draft.tasks[0])} label="Learning Outcome" top />
-              <Bullets items={outcomes} />
+              <Bullets items={outcomes} edit={editOutcomes} />
             </>
           )}
         </>
@@ -135,15 +153,21 @@ function Body({ draft, jobId, progress, signature, revealKey, template }: Props 
         <>
           {draft.aim && (
             <p className="paper__aim">
-              <b>Aim:</b> {draft.aim}
+              <b>Aim:</b> <Text value={draft.aim} edit={edit && ((v) => edit({ aim: v }))} label="Aim" multiline />
             </p>
           )}
           {draft.tasks.map((t, i) => (
             <section key={i} className="paper__task">
-              <h3 className="paper__task-title">{upper ? (t.title || `Task ${i + 1}`).toUpperCase() : t.title || `Task ${i + 1}`}</h3>
-              {t.problem && <Item n={1} label="Problem Statement" text={t.problem} />}
+              <h3 className={`paper__task-title${upper ? " paper__task-title--upper" : ""}`}>
+                <Text value={t.title || `Task ${i + 1}`} edit={editTask(i) && ((v) => editTask(i)!((x) => ({ ...x, title: v })))}
+                  label={`Task ${i + 1} title`} />
+              </h3>
+              {t.problem && (
+                <Item n={1} label="Problem Statement" text={t.problem}
+                  edit={editTask(i) && ((v) => editTask(i)!((x) => ({ ...x, problem: v })))} />
+              )}
               <TaskBody task={t} index={i} start={t.problem ? 2 : 1} codeLabel="Code" jobId={jobId}
-                running={progress.tasks[i] === "running"} signature={signature} />
+                running={progress.tasks[i] === "running"} signature={signature} edit={editTask(i)} />
             </section>
           ))}
           {outcomes.length > 0 && (
@@ -151,7 +175,7 @@ function Body({ draft, jobId, progress, signature, revealKey, template }: Props 
               <p className="paper__outcomes-label">
                 <b>Learning Outcomes:</b>
               </p>
-              <Bullets items={outcomes} />
+              <Bullets items={outcomes} edit={editOutcomes} />
             </>
           )}
         </>
@@ -173,18 +197,21 @@ function TaskBody(p: {
   jobId: string
   running: boolean
   signature: string
+  edit: EditTask
 }) {
-  const { task } = p
+  const { task, edit } = p
   let n = p.start
   const objectives = task.objectives.filter((o) => o.trim())
   const files = task.files.filter((f) => f.code.trim())
   const showConsole = task.show_console && (task.output.trim() || (task.status === "passed" && task.images.length === 0))
+  const editFile = (name: string) =>
+    edit && ((code: string) => edit((t) => ({ ...t, files: t.files.map((f) => (f.name === name ? { ...f, code } : f)) })))
   return (
     <>
       {objectives.length > 0 && (
         <>
           <Item n={n++} label="Objective" top={p.top} />
-          <Bullets items={objectives} />
+          <Bullets items={objectives} edit={edit && ((items) => edit((t) => ({ ...t, objectives: items })))} />
         </>
       )}
       {files.length > 0 && (
@@ -195,7 +222,7 @@ function TaskBody(p: {
               {files.length > 1 && <p className="paper__file-name">{f.name}:</p>}
               <pre className="paper__code">
                 {p.signature ? commentLine(p.signature, task.language, f.name) + "\n" : ""}
-                {tidy(f.code, task.language)}
+                <Text value={tidy(f.code, task.language)} edit={editFile(f.name)} label={`Code of ${f.name}`} multiline code />
               </pre>
             </div>
           ))}
@@ -208,8 +235,11 @@ function TaskBody(p: {
         ) : (
           <>
             {showConsole && (
-              <div className="console" role="img" aria-label="Program output">
-                <pre>{task.output || "(the program printed nothing)"}</pre>
+              <div className="console">
+                <pre>
+                  <Text value={task.output || "(the program printed nothing)"}
+                    edit={edit && task.output ? (v) => edit((t) => ({ ...t, output: v })) : null} label="Program output" multiline code />
+                </pre>
               </div>
             )}
             {task.images.map((name) => (
@@ -223,24 +253,80 @@ function TaskBody(p: {
   )
 }
 
-function Item({ n, label, text, top }: { n: number; label: string; text?: string; top?: boolean }) {
+function Item({ n, label, text, top, edit }: {
+  n: number
+  label: string
+  text?: string
+  top?: boolean
+  edit?: ((value: string) => void) | null
+}) {
   return (
     <p className={`paper__item${top ? " paper__item--top" : ""}`}>
       <b>
         {n}. {label}:
       </b>
-      {text ? ` ${text}` : ""}
+      {text ? (
+        <>
+          {" "}
+          <Text value={text} edit={edit ?? null} label={label} multiline />
+        </>
+      ) : null}
     </p>
   )
 }
 
-function Bullets({ items }: { items: string[] }) {
+function Bullets({ items, edit }: { items: string[]; edit?: ((items: string[]) => void) | null }) {
   return (
     <ul className="paper__bullets">
       {items.map((o, i) => (
-        <li key={i}>{o}</li>
+        <li key={i}>
+          <Text value={o} label={`Point ${i + 1}`}
+            edit={edit ? (v) => edit(items.map((x, k) => (k === i ? v : x)).filter((x) => x.trim())) : null} />
+        </li>
       ))}
     </ul>
+  )
+}
+
+/**
+ * Text that becomes editable in place when `edit` is set. The DOM owns the text while it has
+ * focus; the new value is reported once, on blur. Enter ends a single-line edit.
+ */
+function Text({ value, edit, label, multiline, code }: {
+  value: string
+  edit: ((value: string) => void) | null
+  label: string
+  multiline?: boolean
+  code?: boolean
+}) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const editable = edit !== null
+  useEffect(() => {
+    const el = ref.current
+    if (el && document.activeElement !== el && el.textContent !== value) el.textContent = value
+  }, [value, editable])
+  if (!edit) return <>{value}</>
+  return (
+    <span
+      ref={ref}
+      className={`editable${code ? " editable--code" : ""}`}
+      contentEditable="plaintext-only"
+      suppressContentEditableWarning
+      spellCheck={!code}
+      role="textbox"
+      aria-label={`Edit ${label}`}
+      aria-multiline={multiline}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" || (!multiline && e.key === "Enter")) {
+          e.preventDefault()
+          e.currentTarget.blur()
+        }
+      }}
+      onBlur={(e) => {
+        const next = (e.currentTarget.innerText || "").replace(/\n+$/, "")
+        if (next !== value) edit(next)
+      }}
+    />
   )
 }
 

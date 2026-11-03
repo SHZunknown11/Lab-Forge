@@ -24,7 +24,7 @@ from core.documents.generator import ReportWriter, safe_filename
 from core.documents.pdf_converter import PdfConversionError, PdfConverter
 from core.execution.runner import SPRING_IMPORT, CodeRunner, prepare_java, unlink_node_modules
 from core.schemas import AIFile, AIReport, AITask, CodeFile, RenderRequest, ReportDraft, RunResult, Task
-from core.screenshots.terminal_renderer import render_console
+from core.screenshots.terminal_renderer import fit_output, render_console
 from core.validation.pdf_renderer import PdfPreviewRenderer
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -224,7 +224,7 @@ def run_task(job_dir: Path, index: int, task: Task, runner: CodeRunner | None = 
             name = f"t{index}_fig{n}_{stamp}.png"
             shutil.move(src, job_dir / name)
             figures.append(name)
-        task.output = result.output
+        task.output = fit_output(result.output)  # at most one page in the report
         task.status = result.status
         task.note = result.note
         task.images = figures + kept

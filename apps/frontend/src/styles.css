@@ -763,7 +763,42 @@ textarea.code {
   width: 100%;
   max-width: 816px;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+}
+
+.paper-hint {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: var(--s1);
+  text-align: center;
+}
+
+/* Text on the page that can be edited in place. */
+.editable {
+  border-radius: 2px;
+  outline: 1px dashed transparent;
+  outline-offset: 2px;
+  cursor: text;
+  transition: outline-color 0.15s, background-color 0.15s;
+}
+
+.editable:hover {
+  outline-color: var(--field);
+}
+
+.editable:focus {
+  outline: 2px solid var(--ink);
+  background: rgb(29 63 196 / 0.05);
+}
+
+.editable--code {
+  display: inline-block;
+  min-width: 60%;
+}
+
+.console .editable:focus {
+  background: rgb(255 255 255 / 0.06);
 }
 
 .paper {
@@ -900,6 +935,10 @@ textarea.code {
   text-align: center;
   font-size: 18.7px;
   font-weight: 700;
+}
+
+.paper__task-title--upper {
+  text-transform: uppercase;
 }
 
 .paper--plain .paper__task-title {

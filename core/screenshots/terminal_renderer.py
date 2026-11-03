@@ -15,7 +15,9 @@ LINE = 21
 PAD = 18
 BAR_H = 30
 WRAP = 104
-MAX_LINES = 140
+MAX_LINES = 140  # a hard stop; fit_output() keeps reports to one page long before this
+PAGE_LINES = 40  # console rows that fit on one report page
+KEEP_TAIL = 8  # rows kept from the end of a long output (where the result usually is)
 
 _FONTS = ("consola.ttf", "CascadiaMono.ttf", "cour.ttf", "DejaVuSansMono.ttf",
           "LiberationMono-Regular.ttf", "Menlo.ttc")
@@ -28,6 +30,33 @@ def _font(size: int):
         except OSError:
             continue
     return ImageFont.load_default()
+
+
+def _rows(line: str) -> int:
+    return max(1, -(-len(line.expandtabs(4)) // WRAP))
+
+
+def fit_output(text: str, page_lines: int = PAGE_LINES) -> str:
+    """Trim program output to one page: the start, a note of what was left out, and the end."""
+    lines = (text or "").rstrip("\n").split("\n")
+    longest = 6 * WRAP  # one runaway line (a long list, a JSON dump) may not eat the page
+    lines = [line if len(line) <= longest else line[:longest] + " …" for line in lines]
+    if sum(_rows(line) for line in lines) <= page_lines:
+        return "\n".join(lines)
+    head, budget = [], page_lines - KEEP_TAIL - 1
+    for line in lines:
+        if budget - _rows(line) < 0:
+            break
+        head.append(line)
+        budget -= _rows(line)
+    tail, budget = [], KEEP_TAIL
+    for line in reversed(lines[len(head):]):
+        if budget - _rows(line) < 0:
+            break
+        tail.insert(0, line)
+        budget -= _rows(line)
+    hidden = len(lines) - len(head) - len(tail)
+    return "\n".join([*head, f"… {hidden} more line{'s' if hidden != 1 else ''} …", *tail])
 
 
 def render_console(text: str, path: str | Path, command: str = "", scale: int = 2) -> tuple[int, int]:

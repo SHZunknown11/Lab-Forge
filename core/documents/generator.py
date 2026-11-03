@@ -15,6 +15,9 @@ from core.documents.templates import get_template
 from core.schemas import MetaField, ReportDraft
 
 MAX_IMAGE_WIDTH_IN = 6.0
+MAX_IMAGE_HEIGHT_IN = 8.0  # one page, below the header
+CODE_CHAR_PT = 6.0  # Courier New at 10 pt is 0.6 em wide
+CODE_WRAP_INDENT = 4  # extra characters of indent for the wrapped part of a long line
 _BRACE_LANGS = {"java", "c", "cpp", "javascript", "react"}
 
 
@@ -228,11 +231,15 @@ class ReportWriter:
         for line in lines:
             p = doc.add_paragraph()
             fmt = p.paragraph_format
-            fmt.left_indent = Inches(0.5)
+            # Hanging indent: the line starts at its own indentation and a wrapped remainder
+            # continues 4 characters further in, instead of at the left margin.
+            lead = len(line) - len(line.lstrip(" "))
+            fmt.left_indent = Inches(0.5) + Pt(CODE_CHAR_PT * (lead + CODE_WRAP_INDENT))
+            fmt.first_line_indent = -Pt(CODE_CHAR_PT * CODE_WRAP_INDENT)
             fmt.space_before = Pt(0)
             fmt.space_after = Pt(0)
             fmt.line_spacing = Pt(12)
-            r = p.add_run(line)
+            r = p.add_run(line.lstrip(" "))
             r.font.name = "Courier New"
             r._r.get_or_add_rPr().get_or_add_rFonts().set(qn("w:eastAsia"), "Courier New")
             r.font.size = Pt(10)
@@ -240,10 +247,11 @@ class ReportWriter:
     def _image(self, doc, path: Path, ppi: float) -> None:
         try:
             with Image.open(path) as img:
-                width_px = img.width
+                width_px, height_px = img.size
         except OSError:
             return
         width_in = min(MAX_IMAGE_WIDTH_IN, width_px / max(ppi, 1))
+        width_in = min(width_in, MAX_IMAGE_HEIGHT_IN * width_px / max(height_px, 1))  # never taller than a page
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         p.paragraph_format.space_before = Pt(6)
