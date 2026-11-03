@@ -1,4 +1,7 @@
-"""Deploy LabForge to a free Hugging Face Space (Docker, 2 vCPU, 16 GB RAM).
+"""Deploy LabForge to a Hugging Face Space (Docker, 2 vCPU, 16 GB RAM).
+
+Docker Spaces on cpu-basic need a Hugging Face PRO subscription (since 2026; creating one
+on a free account fails with 402 Payment Required).
 
     pip install huggingface_hub
     python scripts/deploy_hf.py                 # create/update <you>/labforge, push secrets, wait, smoke-test
