@@ -298,15 +298,25 @@ def _parse_gemini(resp: Any, schema: type):
 
 OPENAI_COMPATIBLE = {
     # name: (base URL, key variable, default model). Override with <NAME>_MODEL / <NAME>_BASE_URL.
-    "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY", "openai/gpt-oss-120b"),
-    "cerebras": ("https://api.cerebras.ai/v1", "CEREBRAS_API_KEY", "gpt-oss-120b"),
-    "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "openai/gpt-oss-120b:free"),
-    "mistral": ("https://api.mistral.ai/v1", "MISTRAL_API_KEY", "mistral-small-latest"),
-    "github": ("https://models.github.ai/inference", "GITHUB_MODELS_TOKEN", "openai/gpt-4.1-mini"),
+    # Free tiers (limits change often; check each provider's page). A provider without a key is skipped.
+    "cerebras": ("https://api.cerebras.ai/v1", "CEREBRAS_API_KEY", "gpt-oss-120b"),  # fastest; ~14k req/day
+    "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY", "openai/gpt-oss-120b"),  # very fast; ~1k-14k req/day
+    "sambanova": ("https://api.sambanova.ai/v1", "SAMBANOVA_API_KEY", "Meta-Llama-3.3-70B-Instruct"),
+    "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "openai/gpt-oss-120b:free"),  # 50-1000/day
+    "nvidia": ("https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY", "openai/gpt-oss-120b"),  # 40 req/min
+    "mistral": ("https://api.mistral.ai/v1", "MISTRAL_API_KEY", "mistral-small-latest"),  # ~1B tokens/month
+    "github": ("https://models.github.ai/inference", "GITHUB_MODELS_TOKEN", "openai/gpt-4.1-mini"),  # 50-150/day
+    "zai": ("https://api.z.ai/api/paas/v4", "ZAI_API_KEY", "glm-4.5-flash"),  # GLM Flash models are free
+    "huggingface": ("https://router.huggingface.co/v1", "HF_INFERENCE_TOKEN", "openai/gpt-oss-120b"),  # small credit
+    "cohere": ("https://api.cohere.ai/compatibility/v1", "COHERE_API_KEY", "command-a-03-2025"),  # 1k calls/month
+    "deepseek": ("https://api.deepseek.com/v1", "DEEPSEEK_API_KEY", "deepseek-chat"),  # not free, but very cheap
     # Workers AI behind a tiny proxy Worker on your own Cloudflare account (deploy/cloudflare-ai).
     # Free plan: 10,000 neurons a day, about 30 sheets with gpt-oss-120b.
     "cloudflare": ("", "CLOUDFLARE_AI_KEY", "@cf/openai/gpt-oss-120b"),
 }
+# Fastest first: with racing (HEDGE_SECONDS) a slow or exhausted provider hands over quickly.
+DEFAULT_ORDER = ("cerebras,groq,gemini,sambanova,openrouter,nvidia,cloudflare,mistral,github,zai,huggingface,"
+                 "cohere,deepseek")
 # Providers that accept OpenAI's reasoning_effort for gpt-oss; low keeps hidden reasoning short.
 REASONING_EFFORT = {"groq", "cerebras", "cloudflare"}
 
@@ -508,7 +518,7 @@ def _guess_stdin(code: str) -> str:
 def get_provider():
     if os.environ.get("AI_MODE", "cloud").lower() == "local":
         return LocalProvider()
-    order = os.environ.get("AI_PROVIDERS", "gemini,cloudflare,groq,cerebras,openrouter,mistral,github")
+    order = os.environ.get("AI_PROVIDERS", DEFAULT_ORDER)
     providers = []
     for name in (p.strip().lower() for p in order.split(",") if p.strip()):
         if name == "gemini":

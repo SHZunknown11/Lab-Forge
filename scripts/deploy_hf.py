@@ -26,14 +26,19 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from core.ai.provider import OPENAI_COMPATIBLE  # noqa: E402
+
+# Every provider's key, model and base URL, so a provider added to the table is deployed too.
+PROVIDER_KEYS = tuple(key for _, key, _ in OPENAI_COMPATIBLE.values())
+PROVIDER_SETTINGS = tuple(f"{name.upper()}_{s}" for name in OPENAI_COMPATIBLE for s in ("MODEL", "BASE_URL"))
 
 # Files the Docker build needs (tracked by git, filtered by these prefixes).
 INCLUDE = ("Dockerfile", ".dockerignore", "pyproject.toml", "main.py", "apps/api/", "apps/frontend/",
            "core/", "scripts/", "templates/", "config/subjects.json", "config/student_profile.example.json")
-SECRETS = ("GEMINI_API_KEY", "CLOUDFLARE_AI_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY", "OPENROUTER_API_KEY",
-           "MISTRAL_API_KEY", "GITHUB_MODELS_TOKEN", "LABFORGE_ADMIN_TOKEN", "LABFORGE_LOG_DB_URL")
-VARIABLES = ("AI_PROVIDERS", "GEMINI_MODEL", "GEMINI_FALLBACK_MODELS", "GEMINI_MAX_ATTEMPTS", "GEMINI_THINKING",
-             "CLOUDFLARE_BASE_URL", "CLOUDFLARE_MODEL", "GROQ_MODEL", "OPENROUTER_MODEL", "AI_REASONING_EFFORT",
+SECRETS = ("GEMINI_API_KEY", *PROVIDER_KEYS, "LABFORGE_ADMIN_TOKEN", "LABFORGE_LOG_DB_URL")
+VARIABLES = ("AI_PROVIDERS", "AI_TIMEOUT_SECONDS", "AI_HEDGE_SECONDS", "GEMINI_MODEL", "GEMINI_FALLBACK_MODELS",
+             "GEMINI_MAX_ATTEMPTS", "GEMINI_THINKING", *PROVIDER_SETTINGS, "AI_REASONING_EFFORT",
              "LABFORGE_AI_DAILY_LIMIT", "VITE_ADSENSE_CLIENT", "VITE_ADSENSE_SLOT_RAIL", "VITE_ADSENSE_SLOT_BENCH")
 
 SPACE_README = """---

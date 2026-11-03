@@ -21,15 +21,14 @@ import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from deploy_hf import read_env  # noqa: E402
+from deploy_hf import PROVIDER_KEYS, PROVIDER_SETTINGS, read_env  # noqa: E402
 
 API = "https://api.render.com/v1"
 REPO = "https://github.com/SHZunknown11/Lab-Forge"
 NAME = "labforge"
 FROM_ENV = ("GEMINI_API_KEY", "GEMINI_MODEL", "GEMINI_FALLBACK_MODELS", "GEMINI_MAX_ATTEMPTS", "GEMINI_THINKING",
-            "CLOUDFLARE_AI_KEY", "CLOUDFLARE_BASE_URL", "CLOUDFLARE_MODEL", "GROQ_API_KEY", "CEREBRAS_API_KEY",
-            "OPENROUTER_API_KEY", "MISTRAL_API_KEY", "GITHUB_MODELS_TOKEN", "AI_PROVIDERS", "AI_REASONING_EFFORT",
-            "LABFORGE_ADMIN_TOKEN", "LABFORGE_AI_DAILY_LIMIT", "LABFORGE_LOG_DB_URL")
+            *PROVIDER_KEYS, *PROVIDER_SETTINGS, "AI_PROVIDERS", "AI_TIMEOUT_SECONDS", "AI_HEDGE_SECONDS",
+            "AI_REASONING_EFFORT", "LABFORGE_ADMIN_TOKEN", "LABFORGE_AI_DAILY_LIMIT", "LABFORGE_LOG_DB_URL")
 # The free instance: 512 MB RAM, 0.1 CPU.
 SMALL_HOST = {
     "LABFORGE_MAX_PARALLEL_RUNS": "1",
