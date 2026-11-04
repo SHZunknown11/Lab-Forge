@@ -52,6 +52,8 @@ class ReportWriter:
                 continue
             body.remove(child)
 
+        if tpl.header_png and tpl.header_png.exists():
+            _picture_header(doc, tpl.header_png, tpl.header_at_in)
         self._title(paras[0], draft)
         self._metadata(paras[1], paras[2:6], fields, tpl.meta_size)
         outcomes = [o.strip() for o in draft.learning_outcomes if o.strip()]
@@ -272,6 +274,40 @@ def tidy_code(code: str, language: str) -> str:
             out.append(line)
         lines = out
     return "\n".join(lines)
+
+
+def _picture_header(doc, png: Path, at_in: tuple[float, float], dpi: float = 200) -> None:
+    """Replace each section's header with `png`, floating at `at_in` inches from the page's top-left.
+
+    Behind the text and anchored to the page, so it never moves the body, and it looks the same
+    in Word and in LibreOffice's PDF whatever fonts the machine has.
+    """
+    from docx.oxml import parse_xml
+    from docx.shared import Emu
+
+    with Image.open(png) as img:
+        width_in, height_in = img.width / dpi, img.height / dpi
+    for section in doc.sections:
+        for header in (section.header, section.first_page_header, section.even_page_header):
+            if header.is_linked_to_previous:
+                continue
+            for el in list(header._element):
+                header._element.remove(el)
+            run = header.add_paragraph().add_run()
+            inline = run.add_picture(str(png), width=Inches(width_in), height=Inches(height_in))._inline
+            x, y = Inches(at_in[0]), Inches(at_in[1])
+            anchor = parse_xml(
+                '<wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+                'distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="1" '
+                'locked="0" layoutInCell="1" allowOverlap="1">'
+                '<wp:simplePos x="0" y="0"/>'
+                f'<wp:positionH relativeFrom="page"><wp:posOffset>{int(x)}</wp:posOffset></wp:positionH>'
+                f'<wp:positionV relativeFrom="page"><wp:posOffset>{int(y)}</wp:posOffset></wp:positionV>'
+                f'<wp:extent cx="{int(Emu(Inches(width_in)))}" cy="{int(Emu(Inches(height_in)))}"/>'
+                '<wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/></wp:anchor>')
+            for tag in ("docPr", "cNvGraphicFramePr", "graphic"):
+                anchor.append(inline.find(qn(f"wp:{tag}")) if tag != "graphic" else inline.find(qn("a:graphic")))
+            inline.getparent().replace(inline, anchor)
 
 
 def _carry_header_to_last_section(body) -> None:

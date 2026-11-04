@@ -23,6 +23,10 @@ class Template:
     meta_size: int
     upper_headings: bool
     header_image: str | None  # served by the frontend for the live preview
+    # The same header as a picture, placed on the page in the DOCX/PDF. The template's own header is
+    # text in Impact inside text boxes, which LibreOffice draws in another font and clips.
+    header_png: Path | None = None
+    header_at_in: tuple[float, float] = (0.0, 0.0)  # where its top-left corner sits on the page
 
 
 TEMPLATES: dict[str, Template] = {
@@ -34,6 +38,8 @@ TEMPLATES: dict[str, Template] = {
         meta_size=14,
         upper_headings=True,
         header_image="/template-cu-header.png",
+        header_png=ROOT / "templates/chandigarh-university/pblj/header.png",
+        header_at_in=(0.27, 0.27),
     ),
     "plain": Template(
         id="plain",

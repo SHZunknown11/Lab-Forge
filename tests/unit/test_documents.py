@@ -95,3 +95,13 @@ def test_long_output_is_cut_to_one_page():
     assert len(rows) == PAGE_LINES and rows[0] == "row 0" and rows[-1] == "row 499"
     assert any("more lines" in r for r in rows)
     assert fit_output("short\noutput") == "short\noutput"
+
+
+def test_cu_header_is_a_picture_not_font_dependent_text(tmp_path):
+    import zipfile
+
+    out = ReportWriter().write("cu-cse", tmp_path / "r.docx", FIELDS,
+                               ReportDraft(title="Experiment 1", aim="x", tasks=[task()]), [[]])
+    z = zipfile.ZipFile(out)
+    headers = [z.read(n).decode() for n in z.namelist() if n.startswith("word/header") and n.endswith(".xml")]
+    assert headers and all("<wp:anchor" in h and "Impact" not in h and "<w:t>" not in h for h in headers)
