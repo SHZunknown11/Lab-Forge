@@ -25,6 +25,23 @@ services:
     restart: unless-stopped
     depends_on: [gotenberg]
 
+  # Optional: run student programs in a separate container with no secrets.
+  # Set EXEC_BACKEND=remote, EXEC_WORKER_URL=http://worker:8100 and EXEC_WORKER_TOKEN in .env,
+  # then: docker compose --profile worker up -d
+  worker:
+    profiles: ["worker"]
+    build: .
+    command: ["sh", "-c", "exec uvicorn apps.worker.main:app --host 0.0.0.0 --port 8100"]
+    environment:
+      EXEC_WORKER_TOKEN: ${EXEC_WORKER_TOKEN:-}
+      EXEC_ALLOW_NETWORK: "0"
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 512
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
   gotenberg:
     image: gotenberg/gotenberg:8
     restart: unless-stopped

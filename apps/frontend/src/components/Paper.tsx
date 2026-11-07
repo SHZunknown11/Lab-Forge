@@ -57,7 +57,11 @@ export function Paper(props: Props) {
 
   return (
     <div className="paper-holder" ref={holder}>
-      {edit && <p className="paper-hint">Click any text on the page to change it. Your Word and PDF files update to match.</p>}
+      {edit && (
+        <p className="paper-hint">
+          Click any text on the page to change it. Program output can't be edited: change the code and run it again.
+        </p>
+      )}
       <article
         className={`paper${plain ? " paper--plain" : ""}${dragging ? " paper--drag" : ""}`}
         style={{ zoom }}
@@ -203,7 +207,10 @@ function TaskBody(p: {
   let n = p.start
   const objectives = task.objectives.filter((o) => o.trim())
   const files = task.files.filter((f) => f.code.trim())
-  const showConsole = task.show_console && (task.output.trim() || (task.status === "passed" && task.images.length === 0))
+  // Changed code has no output until it runs again: the server leaves it out of the files too.
+  const stale = !!task.stale
+  const images = stale ? task.images.filter((n) => n.startsWith("up_")) : task.images
+  const showConsole = !stale && task.show_console && (task.output.trim() || (task.status === "passed" && images.length === 0))
   const editFile = (name: string) =>
     edit && ((code: string) => edit((t) => ({ ...t, files: t.files.map((f) => (f.name === name ? { ...f, code } : f)) })))
   return (
@@ -236,16 +243,17 @@ function TaskBody(p: {
           <>
             {showConsole && (
               <div className="console">
-                <pre>
-                  <Text value={task.output || "(the program printed nothing)"}
-                    edit={edit && task.output ? (v) => edit((t) => ({ ...t, output: v })) : null} label="Program output" multiline code />
+                {/* Never editable: this is what the program really printed. */}
+                <pre title="This is what the program printed. Change the code or input and run it again to change it.">
+                  {task.output || "(the program printed nothing)"}
                 </pre>
               </div>
             )}
-            {task.images.map((name) => (
+            {images.map((name) => (
               <img key={name} src={fileUrl(p.jobId, name)} alt="Output screenshot" loading="lazy" />
             ))}
-            {!showConsole && task.images.length === 0 && <p className="paper__pending">[Attach output screenshot]</p>}
+            {stale && <p className="paper__pending">[Code changed: run it again to get its output]</p>}
+            {!stale && !showConsole && images.length === 0 && <p className="paper__pending">[Attach output screenshot]</p>}
           </>
         )}
       </div>

@@ -17,6 +17,8 @@ export interface Task {
   note: string
   images: string[]
   show_console: boolean
+  /** Browser-only: the code or input changed since the last run, so the output no longer matches. */
+  stale?: boolean
 }
 
 export interface Draft {
@@ -50,6 +52,14 @@ export interface Meta {
   ai_ready: boolean
   limits: { daily: number; remaining: number }
   job_ttl_hours: number
+  log_days: number
+  log_personal: boolean
+}
+
+export interface Explanation {
+  summary: string
+  steps: string[]
+  viva: { q: string; a: string }[]
 }
 
 export interface RenderResult {
@@ -61,7 +71,7 @@ export interface RenderResult {
   warnings: string[]
 }
 
-export type DraftEvent =
+export type DraftEvent = { seq?: number } & (
   | { type: "job"; job: string; details?: Record<string, string> }
   | { type: "ping" }
   | { type: "stage"; stage: string; text: string }
@@ -69,10 +79,14 @@ export type DraftEvent =
   | { type: "task"; index: number; title: string; status: RunStatus; note: string }
   | { type: "done"; draft: Draft; cached: boolean }
   | { type: "error"; message: string }
+)
 
 export interface SavedJob {
   id: string
   draft: Draft
   savedAt: number
   cached: boolean
+  /** Still being written on the server when this was saved: pick it up again on the next visit. */
+  pending?: boolean
+  lastSeq?: number
 }

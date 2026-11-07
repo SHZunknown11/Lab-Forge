@@ -30,6 +30,7 @@ interface Report {
   reruns: number
   issue: boolean
   feedback: { rating: "up" | "down"; reasons: string[]; comment: string; ts: string } | null
+  reports?: { reason: string; comment: string; task: number | null; ts: string }[]
 }
 
 const TOKEN_KEY = "lf.admin"
@@ -236,6 +237,12 @@ export default function Admin() {
                       {r.feedback.comment && <p>“{r.feedback.comment}”</p>}
                     </div>
                   )}
+                  {(r.reports ?? []).map((rep, i) => (
+                    <div key={`rep${i}`} className="admin__feedback admin__feedback--down">
+                      <b>🚩 Content reported: {rep.reason}{rep.task !== null && rep.task !== undefined ? ` (task ${rep.task + 1})` : ""}</b>
+                      {rep.comment && <p>“{rep.comment}”</p>}
+                    </div>
+                  ))}
                   {r.tasks.map((t, i) => (
                     <div key={i} className={`admin__task admin__task--${t.status}`}>
                       <div className="admin__taskhead">

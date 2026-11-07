@@ -1,33 +1,89 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ApiError, createDraft, fileUrl, getMeta, renderReport, runTask, uploadImage } from "./api"
+import {
+  ApiError, cancelJob, createDraft, deleteJob, fileUrl, getMeta, renderReport, resumeDraft, runTask, uploadImage,
+} from "./api"
 import { AdSlot } from "./components/AdSlot"
-import { InfoPage, type Route } from "./components/InfoPage"
+import { InfoPage } from "./components/InfoPage"
 import { Paper, type Progress } from "./components/Paper"
 import { Feedback } from "./components/Feedback"
 import { Review } from "./components/Review"
+import { ROUTES, pageTitle, type Route } from "./routes"
 import { defaultFields, documentOrder, today, uid, useStored, type RecentSubject } from "./store"
-import type { Draft, Field, Meta, RenderResult, SavedJob, Task } from "./types"
+import type { Draft, DraftEvent, Field, Meta, RenderResult, SavedJob, Task } from "./types"
 
 const EMPTY_PROGRESS: Progress = { stages: [], tasks: {} }
 
+function readRoute(): Route {
+  const page = location.pathname.replace(/^\/+|\/+$/g, "") as Route
+  return (ROUTES as string[]).includes(page) ? page : ""
+}
+
+/** Old links used #/privacy: move them to /privacy. */
+function moveLegacyHash() {
+  const legacy = location.hash.match(/^#\/?(about|privacy|terms)$/)
+  if (legacy) history.replaceState(null, "", `/${legacy[1]}`)
+}
+
+/** Real page URLs (/privacy, /guide, ...) so search engines and ad reviewers can see each page. */
 function useRoute(): Route {
-  const read = () => (location.hash.replace(/^#\/?/, "") as Route) || ""
-  const [route, setRoute] = useState<Route>(read)
+  const [route, setRoute] = useState<Route>(() => {
+    moveLegacyHash()
+    return readRoute()
+  })
   useEffect(() => {
     const on = () => {
-      setRoute(read())
+      moveLegacyHash()
+      setRoute(readRoute())
       window.scrollTo(0, 0)
     }
+    // Internal links change the page without reloading the app (and losing a report in progress).
+    const click = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+      const a = (e.target as Element | null)?.closest?.("a")
+      if (!a || a.target || a.hasAttribute("download")) return
+      const url = new URL(a.href, location.href)
+      if (url.origin !== location.origin || url.pathname.startsWith("/api/") || url.pathname === "/admin") return
+      const page = url.pathname.replace(/^\/+|\/+$/g, "")
+      if (page && !(ROUTES as string[]).includes(page)) return
+      e.preventDefault()
+      if (url.pathname !== location.pathname) history.pushState(null, "", url.pathname)
+      on()
+    }
+    window.addEventListener("popstate", on)
     window.addEventListener("hashchange", on)
-    return () => window.removeEventListener("hashchange", on)
+    document.addEventListener("click", click)
+    return () => {
+      window.removeEventListener("popstate", on)
+      window.removeEventListener("hashchange", on)
+      document.removeEventListener("click", click)
+    }
   }, [])
-  return ["about", "privacy", "terms"].includes(route) ? route : ""
+  useEffect(() => {
+    document.title = pageTitle(route)
+  }, [route])
+  return route
+}
+
+/** Code or input that changed since the last run: its old output no longer belongs to it. */
+function markStale(next: Draft, prev: Draft): Draft {
+  let changed = false
+  const tasks = next.tasks.map((t, i) => {
+    const old = prev.tasks[i]
+    if (!old || t.stale) return t
+    const same = t.stdin === old.stdin && t.files.length === old.files.length &&
+      t.files.every((f, k) => f.code === old.files[k].code && f.name === old.files[k].name)
+    if (same) return t
+    changed = true
+    return { ...t, stale: true }
+  })
+  return changed ? { ...next, tasks } : next
 }
 
 export default function App() {
   const route = useRoute()
   const [meta, setMeta] = useState<Meta | null>(null)
   const [metaError, setMetaError] = useState("")
+  const [waking, setWaking] = useState(false)
   const [fields, setFields] = useStored<Field[]>("lf.fields.v1", [])
   const [template, setTemplate] = useStored("lf.template", "cu-cse")
   const [signCode, setSignCode] = useStored("lf.sign", false)
@@ -51,14 +107,19 @@ export default function App() {
   const [revealKey, setRevealKey] = useState("start")
   const [autoMake, setAutoMake] = useState(false)
   const abort = useRef<AbortController | null>(null)
+  const writingJob = useRef("")
 
   useEffect(() => {
-    getMeta()
+    getMeta(() => setWaking(true))
       .then((m) => {
+        setWaking(false)
         setMeta(m)
         if (!m.templates.some((t) => t.id === template)) setTemplate(m.templates[0]?.id ?? "cu-cse")
       })
-      .catch((e: Error) => setMetaError(e.message))
+      .catch((e: Error) => {
+        setWaking(false)
+        setMetaError(e.message)
+      })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -89,9 +150,13 @@ export default function App() {
           setJob(null)
           setRender(null)
           setError("This report was cleared from the server when it was updated. Upload the sheet again to rebuild it.")
+        } else if (job.pending) {
+          // The page was closed while the report was being written: it carried on, so pick it up.
+          void follow(job.id, job.lastSeq ?? -1)
         }
       })
       .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job, writing, setJob])
 
   const tpl = meta?.templates.find((t) => t.id === template)
@@ -115,21 +180,14 @@ export default function App() {
     )
   }
 
-  // Once the programs have run (or been re-run), make the Word and PDF files without being asked.
+  // Once the programs have run, make the Word file without being asked. It's quick; the PDF
+  // (LibreOffice, slow on a small server) is made only when the student asks for it.
   useEffect(() => {
     if (!autoMake || !job || writing || rendering || Object.keys(busy).length || Object.keys(uploading).length) return
     setAutoMake(false)
-    void makeFiles()
+    void makeFiles(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoMake, job, writing, rendering, busy, uploading])
-
-  // Edits on the page or in the form: once the student pauses, the downloads catch up with them.
-  useEffect(() => {
-    if (!stale || writing || rendering || Object.keys(busy).length || Object.keys(uploading).length) return
-    const timer = setTimeout(() => void makeFiles(), 2500)
-    return () => clearTimeout(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stale, currentKey, writing, rendering, busy, uploading])
 
   const focusField = (id: string) => {
     setView("edit")
@@ -141,11 +199,12 @@ export default function App() {
   }
 
   const updateDraft = useCallback(
-    (draft: Draft) => setJob((j) => (j ? { ...j, draft, savedAt: Date.now() } : j)),
+    (draft: Draft) => setJob((j) => (j ? { ...j, draft: markStale(draft, j.draft), savedAt: Date.now() } : j)),
     [setJob],
   )
   const changeDraft = useCallback(
-    (change: (draft: Draft) => Draft) => setJob((j) => (j ? { ...j, draft: change(j.draft), savedAt: Date.now() } : j)),
+    (change: (draft: Draft) => Draft) =>
+      setJob((j) => (j ? { ...j, draft: markStale(change(j.draft), j.draft), savedAt: Date.now() } : j)),
     [setJob],
   )
 
@@ -156,6 +215,84 @@ export default function App() {
       return true
     }
     return false
+  }
+
+  interface Flow {
+    jobId: string
+    draft: Draft | null
+    finished: boolean
+    failed: boolean
+    cached: boolean
+    seq: number
+  }
+
+  /** What to do with each event of a report being written (first time or picked up again). */
+  function onEventFor(flow: Flow) {
+    return (e: DraftEvent) => {
+      if (typeof e.seq === "number") flow.seq = Math.max(flow.seq, e.seq)
+      if (e.type === "job") {
+        flow.jobId = e.job
+        writingJob.current = e.job
+        if (e.details) fillFromSheet(e.details)
+      } else if (e.type === "stage") {
+        setProgress((p) => ({ ...p, stages: [...p.stages, { stage: e.stage, text: e.text }] }))
+      } else if (e.type === "draft") {
+        flow.draft = e.draft
+        setRevealKey(flow.jobId)
+        setProgress((p) => ({ ...p, tasks: Object.fromEntries(e.draft.tasks.map((_, i) => [i, "running"])) }))
+        setJob({ id: flow.jobId, draft: e.draft, savedAt: Date.now(), cached: false, pending: true, lastSeq: flow.seq })
+      } else if (e.type === "task") {
+        setProgress((p) => ({ ...p, tasks: { ...p.tasks, [e.index]: e.status } }))
+        setJob((j) => (j && j.id === flow.jobId ? { ...j, lastSeq: flow.seq } : j))
+      } else if (e.type === "done") {
+        flow.finished = true
+        flow.cached = e.cached
+        setProgress((p) => ({ ...p, tasks: {} }))
+        setJob((j) => ({
+          id: flow.jobId,
+          draft: keepUploads(e.draft, j?.id === flow.jobId ? j.draft : null),
+          savedAt: Date.now(),
+          cached: e.cached,
+          pending: false,
+          lastSeq: flow.seq,
+        }))
+      } else if (e.type === "error") {
+        flow.failed = true
+        setError(e.message)
+        setJob((j) => (j && j.id === flow.jobId ? { ...j, pending: false } : j))
+      }
+    }
+  }
+
+  /**
+   * The connection dropped (phone locked, app switched, network blip) but the server carries on:
+   * pick the report up again from the last event we saw. A few tries, a little apart.
+   */
+  async function reconnect(flow: Flow, signal: AbortSignal): Promise<void> {
+    for (let attempt = 0; attempt < 8 && !flow.finished && !flow.failed; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, Math.min(1500 * attempt, 8000)))
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError")
+      try {
+        await resumeDraft(flow.jobId, flow.seq, onEventFor(flow), signal)
+      } catch (e) {
+        if ((e as Error).name === "AbortError") throw e
+        if (e instanceof ApiError && e.status === 404) throw e
+      }
+    }
+    if (!flow.finished && !flow.failed) throw new ApiError("Lost the connection to the server. Check your network and try again.", 0)
+  }
+
+  /** After a report is written: make the Word file, remember the subject. */
+  function afterWriting(flow: Flow) {
+    setAutoMake(true)
+    const subject = value("subject name")
+    if (subject) {
+      const code = value("subject code")
+      setRecent((r) => [{ name: subject, code }, ...r.filter((s) => s.name !== subject)].slice(0, 8))
+    }
+    if (!flow.cached) {
+      setMeta((m) => (m ? { ...m, limits: { ...m.limits, remaining: Math.max(0, m.limits.remaining - 1) } } : m))
+    }
   }
 
   async function write(fresh = false) {
@@ -183,93 +320,77 @@ export default function App() {
     setProgress({ stages: [{ stage: "read", text: "Reading your sheet" }], tasks: {} })
     if (!fresh) setJob(null)
     setView("preview")
-    let jobId = ""
-    let cached = false
-    let failed = false
-    let draft: Draft | null = null
-    let finished = false
+    const flow: Flow = { jobId: "", draft: null, finished: false, failed: false, cached: false, seq: -1 }
     try {
-      let dropped: unknown = null
       try {
-        await createDraft(
-          form,
-          (e) => {
-            if (e.type === "job") {
-              jobId = e.job
-              if (e.details) fillFromSheet(e.details)
-            }
-            else if (e.type === "stage") setProgress((p) => ({ ...p, stages: [...p.stages, { stage: e.stage, text: e.text }] }))
-            else if (e.type === "draft") {
-              draft = e.draft
-              setRevealKey(jobId)
-              setProgress((p) => ({ ...p, tasks: Object.fromEntries(e.draft.tasks.map((_, i) => [i, "running"])) }))
-              setJob({ id: jobId, draft: e.draft, savedAt: Date.now(), cached: false })
-            } else if (e.type === "task") setProgress((p) => ({ ...p, tasks: { ...p.tasks, [e.index]: e.status } }))
-            else if (e.type === "done") {
-              finished = true
-              cached = e.cached
-              setProgress((p) => ({ ...p, tasks: {} }))
-              setJob((j) => ({
-                id: jobId,
-                draft: keepUploads(e.draft, j?.id === jobId ? j.draft : null),
-                savedAt: Date.now(),
-                cached: e.cached,
-              }))
-            } else if (e.type === "error") {
-              failed = true
-              setError(e.message)
-            }
-          },
-          ctl.signal,
-        )
+        await createDraft(form, onEventFor(flow), ctl.signal)
       } catch (e) {
-        if ((e as Error).name === "AbortError") throw e
-        dropped = e
+        if ((e as Error).name === "AbortError" || !flow.jobId) throw e
       }
-      if (failed) {
+      if (!flow.finished && !flow.failed) await reconnect(flow, ctl.signal)
+      if (flow.failed) {
         setView("edit") // the message is in the sidebar
         return
       }
-      if (draft && !finished) {
-        // The connection dropped after the draft but before the run results arrived.
-        // Run the programs again here so no task is left without output.
-        setProgress((p) => ({ ...p, stages: [...p.stages, { stage: "run", text: "Running the programs again" }] }))
-        if (!(await runAll(jobId, draft))) return
-      } else if (dropped) throw dropped
-      setAutoMake(true) // nothing left for the student to click: make the Word and PDF files now
-      if (subject) {
-        const code = value("subject code")
-        setRecent((r) => [{ name: subject, code }, ...r.filter((s) => s.name !== subject)].slice(0, 8))
-      }
-      if (!cached) {
-        setMeta((m) => (m ? { ...m, limits: { ...m.limits, remaining: Math.max(0, m.limits.remaining - 1) } } : m))
-      }
+      afterWriting(flow)
     } catch (e) {
-      if ((e as Error).name !== "AbortError") setError((e as Error).message)
+      if ((e as Error).name !== "AbortError" && !handleExpired(e)) setError((e as Error).message)
       setView("edit")
     } finally {
       setWriting(false)
       setProgress((p) => ({ ...p, tasks: {} }))
+      writingJob.current = ""
     }
   }
 
-  /** Runs every task of `draft` on the server, one at a time. False when the job expired. */
-  async function runAll(jobId: string, draft: Draft): Promise<boolean> {
-    for (let i = 0; i < draft.tasks.length; i++) {
-      if (!draft.tasks[i].files.some((f) => f.code.trim())) continue
-      setProgress((p) => ({ ...p, tasks: { ...p.tasks, [i]: "running" } }))
-      try {
-        const task = await runTask(jobId, i, draft.tasks[i])
-        setJob((j) => (j && j.id === jobId
-          ? { ...j, draft: { ...j.draft, tasks: j.draft.tasks.map((t, k) => (k === i ? keepUploads(task, t) : t)) }, savedAt: Date.now() }
-          : j))
-        setProgress((p) => ({ ...p, tasks: { ...p.tasks, [i]: task.status } }))
-      } catch (e) {
-        if (handleExpired(e)) return false
-        throw e
+  /** Pick up a report that was still being written when the page was closed. */
+  async function follow(jobId: string, after: number) {
+    abort.current?.abort()
+    const ctl = new AbortController()
+    abort.current = ctl
+    writingJob.current = jobId
+    setWriting(true)
+    setError("")
+    setProgress({ stages: [{ stage: "resume", text: "Picking your report up where it was" }], tasks: {} })
+    const flow: Flow = { jobId, draft: job?.draft ?? null, finished: false, failed: false, cached: false, seq: after }
+    try {
+      await reconnect(flow, ctl.signal)
+      if (!flow.failed) afterWriting({ ...flow, cached: true })
+    } catch (e) {
+      if ((e as Error).name !== "AbortError" && !handleExpired(e)) {
+        setError((e as Error).message)
+        setJob((j) => (j && j.id === jobId ? { ...j, pending: false } : j))
+      }
+    } finally {
+      setWriting(false)
+      setProgress((p) => ({ ...p, tasks: {} }))
+      writingJob.current = ""
+    }
+  }
+
+  function stop() {
+    abort.current?.abort()
+    if (writingJob.current) void cancelJob(writingJob.current)
+    setJob((j) => (j ? { ...j, pending: false } : j))
+  }
+
+  async function removeFromServer() {
+    if (!job) return
+    if (!window.confirm("Delete this report and its files from the server? Your details in this browser stay.")) return
+    try {
+      await deleteJob(job.id)
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 404)) {
+        setRenderError((e as Error).message)
+        return
       }
     }
-    return true
+    setJob(null)
+    setRender(null)
+    setSheetFile(null)
+    setSheetText("")
+    setView("edit")
+    setError("Deleted. The report and its files are gone from the server.")
   }
 
   async function rerun(index: number) {
@@ -278,7 +399,7 @@ export default function App() {
     try {
       const task = await runTask(job.id, index, job.draft.tasks[index])
       setJob((j) => (j ? { ...j, draft: { ...j.draft, tasks: j.draft.tasks.map((t, i) => (i === index ? keepUploads(task, t) : t)) } } : j))
-      if (render) setAutoMake(true) // the files already made should show the new output
+      if (render) setAutoMake(true) // the Word file already made should show the new output
     } catch (e) {
       if (!handleExpired(e)) setError((e as Error).message)
     } finally {
@@ -311,7 +432,7 @@ export default function App() {
     }
   }
 
-  async function makeFiles() {
+  async function makeFiles(pdf: boolean) {
     if (!job || !meta) return
     setRendering(true)
     setRenderError("")
@@ -321,7 +442,7 @@ export default function App() {
         draft: job.draft,
         fields: ordered.map(({ label, value }) => ({ label, value })),
         template,
-        pdf: meta.pdf,
+        pdf: pdf && meta.pdf,
         sign_code: signCode,
       })
       setRender(result)
@@ -335,7 +456,8 @@ export default function App() {
 
   const you = fields.filter((f) => f.group === "you")
   const experiment = fields.filter((f) => f.group === "experiment")
-  const needsScreenshot = job?.draft.tasks.filter((t) => !t.output.trim() && t.images.length === 0).length ?? 0
+  const needsScreenshot = job?.draft.tasks.filter((t) => !t.output.trim() && t.images.length === 0 && !t.stale).length ?? 0
+  const changedTasks = job?.draft.tasks.filter((t) => t.stale).length ?? 0
   const blanks = ordered.filter((f) => f.label.trim() && !f.value.trim()).map((f) => f.label)
   // While the report is being written, the draft isn't updated yet: show each finished task's real result.
   const finishedNow: Record<number, string> = Object.fromEntries(
@@ -348,10 +470,10 @@ export default function App() {
   )
 
   return (
-    <div className="app" data-view={view}>
+    <div className="app" data-view={route ? "preview" : view}>
       <aside className="rail">
         <header className="brand">
-          <a href="#/" className="brand__mark" aria-label="LabForge home">
+          <a href="/" className="brand__mark" aria-label="LabForge home">
             <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true">
               <rect x="5" y="2" width="22" height="28" rx="2" fill="#fff" stroke="currentColor" strokeWidth="2" />
               <path d="M10 2v28" stroke="var(--margin)" strokeWidth="1.6" />
@@ -371,6 +493,11 @@ export default function App() {
           </button>
         </div>
 
+        {waking && !meta && (
+          <p className="hint" role="status">
+            Starting the server. This takes up to a minute after a quiet spell, and then it's quick.
+          </p>
+        )}
         {metaError && (
           <p className="alert" role="alert">
             {metaError}
@@ -485,13 +612,14 @@ export default function App() {
             {writing ? "Writing your report…" : "Write my report"}
           </button>
           {writing && (
-            <button type="button" className="link link--muted" onClick={() => abort.current?.abort()}>
+            <button type="button" className="link link--muted" onClick={stop}>
               Stop
             </button>
           )}
           {writing && (
             <p className="hint" role="status">
-              Getting the output screenshots can take a few minutes, especially for Java and Spring programs. Please wait, and keep this page open.
+              Getting the output screenshots can take a few minutes, especially for Java and Spring programs. You can leave
+              this page: the report keeps being written and comes back when you return.
             </p>
           )}
           {error && (
@@ -543,8 +671,19 @@ export default function App() {
               <input type="checkbox" checked={signCode} onChange={(e) => setSignCode(e.target.checked)} />
               Put my name and UID as a comment at the top of the code
             </label>
-            {(needsScreenshot > 0 || blanks.length > 0) && (
+            <p className="hint integrity">
+              Before you submit: read the code, run it yourself, and make sure you can explain it in your viva. Follow your
+              college's rules on what you may submit.
+            </p>
+            {(needsScreenshot > 0 || blanks.length > 0 || changedTasks > 0) && (
               <ul className="checklist">
+                {changedTasks > 0 && (
+                  <li>
+                    {changedTasks === 1 ? "One task has" : `${changedTasks} tasks have`} changed code or input. Run{" "}
+                    {changedTasks === 1 ? "it" : "them"} again in step 3, or the report will have no output for{" "}
+                    {changedTasks === 1 ? "it" : "them"}.
+                  </li>
+                )}
                 {needsScreenshot > 0 && (
                   <li>
                     {needsScreenshot === 1 ? "One program has" : `${needsScreenshot} programs have`} no output yet. Add a
@@ -554,8 +693,15 @@ export default function App() {
                 {blanks.length > 0 && <li>Still blank: {blanks.join(", ")}.</li>}
               </ul>
             )}
-            <button type="button" className="btn btn--primary btn--wide" onClick={makeFiles} disabled={rendering || writing}>
-              {rendering ? "Making your files…" : render && !stale ? "Make the files again" : render ? "Update the files" : "Make the Word and PDF files"}
+            <button type="button" className="btn btn--primary btn--wide" onClick={() => void makeFiles(meta.pdf)}
+              disabled={rendering || writing}>
+              {rendering
+                ? "Making your files…"
+                : render && stale
+                  ? "Update the files"
+                  : meta.pdf
+                    ? render?.pdf ? "Make the files again" : "Make the PDF"
+                    : render ? "Make the Word file again" : "Make the Word file"}
             </button>
             {renderError && (
               <p className="alert" role="alert">
@@ -576,6 +722,9 @@ export default function App() {
                   )}
                 </div>
                 {render.pdf_error && <p className="hint">{render.pdf_error}</p>}
+                {!render.pdf && !render.pdf_error && meta.pdf && (
+                  <p className="hint">The Word file is ready. Press "Make the PDF" for a PDF and page previews.</p>
+                )}
                 {render.pages.length > 0 && (
                   <>
                     <p className="hint">
@@ -595,28 +744,36 @@ export default function App() {
                 <Feedback key={job.id} jobId={job.id} />
               </div>
             )}
-            <button type="button" className="link link--muted" onClick={() => {
-              setJob(null)
-              setRender(null)
-              setSheetFile(null)
-              setSheetText("")
-              setView("edit")
-            }}>
-              Start a new report
-            </button>
+            <div className="row row--between">
+              <button type="button" className="link link--muted" onClick={() => {
+                setJob(null)
+                setRender(null)
+                setSheetFile(null)
+                setSheetText("")
+                setView("edit")
+              }}>
+                Start a new report
+              </button>
+              <button type="button" className="link link--muted" onClick={() => void removeFromServer()} disabled={writing}>
+                Delete this report from the server
+              </button>
+            </div>
           </section>
         )}
 
         <footer className="railfoot">
-          <a href="#/about">How it works</a>
-          <a href="#/privacy">Privacy</a>
-          <a href="#/terms">Terms</a>
+          <a href="/guide">Guide</a>
+          <a href="/faq">FAQ</a>
+          <a href="/about">How it works</a>
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
+          <p className="railfoot__note">Independent project, not affiliated with any university.</p>
         </footer>
       </aside>
 
       <main className="bench">
         {route ? (
-          <InfoPage route={route} ttl={meta?.job_ttl_hours ?? 24} />
+          <InfoPage route={route} meta={meta} />
         ) : (
           <Paper
             template={tpl}

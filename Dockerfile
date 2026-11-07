@@ -12,6 +12,11 @@ COPY apps/frontend/ ./
 ARG VITE_ADSENSE_CLIENT=""
 ARG VITE_ADSENSE_SLOT_RAIL=""
 ARG VITE_ADSENSE_SLOT_BENCH=""
+# Shown on the privacy and terms pages; set it before applying for AdSense.
+ARG VITE_CONTACT_EMAIL=""
+# Optional: browser error reports (Sentry) and cookieless page counts (Cloudflare Web Analytics).
+ARG VITE_SENTRY_DSN=""
+ARG VITE_CF_BEACON_TOKEN=""
 RUN npm run build
 
 # ── app ──────────────────────────────────────────────────────────
@@ -36,6 +41,7 @@ WORKDIR /app
 COPY pyproject.toml README.md main.py ./
 COPY core ./core
 COPY apps/api ./apps/api
+COPY apps/worker ./apps/worker
 RUN pip install ".[server]"
 
 # Libraries student programs may import (numpy, matplotlib, OpenCV, scikit-image, pandas;
@@ -71,5 +77,8 @@ ENV HOME=/home/user \
 EXPOSE 7860
 HEALTHCHECK --interval=60s --timeout=5s --start-period=40s \
     CMD python -c "import urllib.request,os;urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\",\"7860\")}/api/health',timeout=4)"
+# The same image runs the execution worker on a separate machine:
+#   docker run -e EXEC_WORKER_TOKEN=... -p 8100:8100 labforge \
+#     sh -c 'exec uvicorn apps.worker.main:app --host 0.0.0.0 --port 8100'
 # exec: uvicorn becomes PID 1 and marks itself non-dumpable (see apps/api/main.py).
 CMD ["sh", "-c", "exec uvicorn apps.api.main:app --host 0.0.0.0 --port ${PORT:-7860} --timeout-keep-alive 30"]

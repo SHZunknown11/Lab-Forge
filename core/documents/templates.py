@@ -32,8 +32,8 @@ class Template:
 TEMPLATES: dict[str, Template] = {
     "cu-cse": Template(
         id="cu-cse",
-        name="Chandigarh University, CSE",
-        description="Department header and layout from the official sample report.",
+        name="Chandigarh University CSE layout (unofficial)",
+        description="Follows the department's sample report. LabForge isn't affiliated with any university.",
         path=ROOT / "templates/chandigarh-university/pblj/template.docx",
         meta_size=14,
         upper_headings=True,

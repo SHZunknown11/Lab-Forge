@@ -23,8 +23,28 @@ services:
         value: gemini,cloudflare,groq,cerebras,openrouter,mistral,github
       - key: LABFORGE_ADMIN_TOKEN
         generateValue: true
-      # Postgres URL for the /admin activity log (the free disk is wiped on every restart).
-      - key: LABFORGE_LOG_DB_URL
+      # Postgres (e.g. Neon) for the draft cache, rate limits and the /admin activity log.
+      # The free disk is wiped on every restart, so without it all of that is lost each deploy.
+      # LABFORGE_LOG_DB_URL (the old name) still works.
+      - key: LABFORGE_DATABASE_URL
+        sync: false
+      - key: LABFORGE_PUBLIC_URL
+        sync: false
+      # Programs run on a separate worker machine (apps/worker), not on this server.
+      # Until a worker exists, leave EXEC_BACKEND unset (local) and see docs/security.md.
+      - key: EXEC_BACKEND
+        sync: false
+      - key: EXEC_WORKER_URL
+        sync: false
+      - key: EXEC_WORKER_TOKEN
+        sync: false
+      - key: ADSENSE_CLIENT
+        sync: false
+      - key: VITE_ADSENSE_CLIENT
+        sync: false
+      - key: VITE_CONTACT_EMAIL
+        sync: false
+      - key: SENTRY_DSN
         sync: false
       # The free instance has 512 MB and a tenth of a CPU: one heavy process at a time,
       # five times the usual timeouts.

@@ -64,6 +64,18 @@ class AIFixes(BaseModel):
     fixes: list[AIFix]
 
 
+class VivaQuestion(BaseModel):
+    q: str
+    a: str
+
+
+class AIExplain(BaseModel):
+    """What a student should be able to say about their program in a viva."""
+    summary: str
+    steps: list[str]
+    viva: list[VivaQuestion]
+
+
 # ── Draft the student reviews and edits ───────────────────────────
 
 RunStatus = Literal["passed", "failed", "not_run"]

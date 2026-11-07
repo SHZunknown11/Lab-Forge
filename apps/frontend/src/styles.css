@@ -749,8 +749,15 @@ textarea.code {
   padding-top: 18px;
   border-top: 1px solid var(--rule);
   display: flex;
-  gap: 18px;
+  flex-wrap: wrap;
+  gap: 6px 18px;
   font-size: var(--s1);
+}
+
+.railfoot__note {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  color: var(--muted);
 }
 
 .railfoot a {
@@ -1110,6 +1117,71 @@ textarea.code {
 
 .info__back {
   font-size: var(--s1);
+}
+
+.info__more {
+  margin-top: 36px;
+  padding-top: 14px;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  font-size: var(--s1);
+}
+
+@media (max-width: 640px) {
+  .info {
+    padding: 24px 18px 36px;
+  }
+}
+
+/* ── understanding the code ─────────────────────────────────────── */
+
+.explain {
+  margin: 10px 0 4px;
+}
+
+.explain__body {
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--ink);
+  background: #f7f9ff;
+  padding: 10px 12px;
+  border-radius: 4px;
+  font-size: var(--s1);
+}
+
+.explain__body p {
+  margin: 6px 0;
+}
+
+.explain__steps {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+
+.explain__label {
+  font-weight: 700;
+  margin-top: 10px;
+}
+
+.explain__q {
+  border-top: 1px solid var(--rule);
+  padding: 6px 0;
+}
+
+.explain__q summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.integrity {
+  border-left: 3px solid var(--highlight);
+  padding-left: 8px;
+}
+
+.feedback__report {
+  display: block;
+  margin-top: 8px;
 }
 
 /* ── ads ────────────────────────────────────────────────────────── */

@@ -33,7 +33,7 @@ from typing import Any
 
 import httpx
 
-from core.schemas import AIFile, AIFixes, AIReport, AITask
+from core.schemas import AIExplain, AIFile, AIFixes, AIReport, AITask
 
 ROOT = Path(__file__).resolve().parents[2]
 # A stalled provider shouldn't hold a student up: each call gets a deadline, and when the first
@@ -63,6 +63,13 @@ SYSTEM_PROMPT = """You turn a university lab experiment sheet into the content o
 - experiment_no: the number as the sheet writes it (e.g. "3" or "1.3"). title: "Experiment <no>". aim: copy the sheet's "Aim" text word for word; write one sentence only if the sheet has no aim.
 - learning_outcomes: 3-5 one-sentence outcomes."""
 
+EXPLAIN_VERSION = "1"
+EXPLAIN_PROMPT = """You help a university student understand a lab program they will be asked about in a viva. Reply with JSON only.
+- summary: 2-3 sentences on what the program does and the main idea behind it.
+- steps: 3-7 short points walking through how the code works, in order, naming the key classes, functions or variables.
+- viva: 5 likely viva questions about this program and the concepts it uses, each with a short, correct answer (1-3 sentences).
+Explain the code as written; don't rewrite it. Plain language, no markdown."""
+
 FIX_PROMPT = """You fix student programs that failed to compile, run or build. For each item return its index, the full corrected files and the stdin to feed it (one value per line, "" if none). Keep the same program, structure and behaviour; change only what the error requires. Programs run unattended with no files, external network or GUI. Node servers must call their own routes, print the responses and exit; MongoDB code must use process.env.MONGO_URI. Reply with JSON only."""
 
 # Compact schema text for providers without native structured output.
@@ -70,7 +77,48 @@ SCHEMA_HINT = {
     "draft": '{"experiment_no":str,"title":str,"aim":str,"tasks":[{"title":str,"problem":str,"objectives":[str],'
              '"language":str,"files":[{"name":str,"code":str}],"stdin":str}],"learning_outcomes":[str]}',
     "fix": '{"fixes":[{"index":int,"files":[{"name":str,"code":str}],"stdin":str}]}',
+    "explain": '{"summary":str,"steps":[str],"viva":[{"q":str,"a":str}]}',
 }
+
+
+class Cancel:
+    """Set by the provider chain once one provider has answered: the others stop where they can
+    (open HTTP requests are closed, retries and back-off sleeps are skipped)."""
+
+    def __init__(self):
+        self._event = threading.Event()
+        self._closers: list = []
+        self._lock = threading.Lock()
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
+
+    def wait(self, seconds: float) -> bool:
+        return self._event.wait(seconds)
+
+    def on_cancel(self, fn) -> None:
+        with self._lock:
+            if self._event.is_set():
+                run = True
+            else:
+                self._closers.append(fn)
+                run = False
+        if run:
+            _quietly(fn)
+
+    def set(self) -> None:
+        with self._lock:
+            self._event.set()
+            closers, self._closers = self._closers, []
+        for fn in closers:
+            _quietly(fn)
+
+
+def _quietly(fn) -> None:
+    try:
+        fn()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 class AIError(RuntimeError):
@@ -83,9 +131,68 @@ class RetryableAIError(AIError):
 
 # ── cache ──────────────────────────────────────────────────────────
 
-class DraftCache:
-    def __init__(self, root: Path | None = None):
-        self.root = Path(root or os.environ.get("LABFORGE_CACHE_DIR", ROOT / "artifacts" / "cache" / "drafts"))
+def _cache_root() -> Path:
+    # Outside artifacts/jobs on purpose: programs run in their own folders and never next to the cache.
+    return Path(os.environ.get("LABFORGE_CACHE_DIR", ROOT / "artifacts" / "cache" / "drafts"))
+
+
+class KVCache:
+    """JSON values by key: Postgres when LABFORGE_DATABASE_URL is set (survives redeploys,
+    shared by every instance), otherwise one file per key."""
+
+    def __init__(self, kind: str, schema: type, root: Path | None = None, db_url: str | None = None):
+        from core.db import database_url
+
+        self.kind = kind
+        self.schema = schema
+        self.root = Path(root) if root else (_cache_root() if kind == "draft" else _cache_root().parent / kind)
+        self.db_url = database_url() if db_url is None else db_url
+
+    def get(self, key: str):
+        if self.db_url:
+            try:
+                from core.db import connect
+
+                with connect(self.db_url) as conn:
+                    row = conn.execute("SELECT value FROM labforge_cache WHERE kind = %s AND key = %s",
+                                       (self.kind, key)).fetchone()
+                return self.schema.model_validate(row[0]) if row else None
+            except ValueError:
+                return None
+            except Exception as exc:  # noqa: BLE001 - a cache outage must not stop a student
+                print(f"[cache] read failed: {type(exc).__name__}: {exc}")
+                return None
+        path = self.root / f"{key}.json"
+        if not path.exists():
+            return None
+        try:
+            return self.schema.model_validate_json(path.read_text(encoding="utf-8"))
+        except ValueError:
+            return None
+
+    def put(self, key: str, value) -> None:
+        if self.db_url:
+            try:
+                from core.db import connect
+
+                with connect(self.db_url) as conn:
+                    conn.execute(
+                        "INSERT INTO labforge_cache (kind, key, value) VALUES (%s, %s, %s::jsonb) "
+                        "ON CONFLICT (kind, key) DO UPDATE SET value = EXCLUDED.value, created = now()",
+                        (self.kind, key, value.model_dump_json()))
+                return
+            except Exception as exc:  # noqa: BLE001
+                print(f"[cache] write failed: {type(exc).__name__}: {exc}")
+                return
+        self.root.mkdir(parents=True, exist_ok=True)
+        tmp = self.root / f"{key}.{threading.get_ident()}.tmp"
+        tmp.write_text(value.model_dump_json(), encoding="utf-8")
+        tmp.replace(self.root / f"{key}.json")
+
+
+class DraftCache(KVCache):
+    def __init__(self, root: Path | None = None, db_url: str | None = None):
+        super().__init__("draft", AIReport, root, db_url)
 
     @staticmethod
     def key(sheet: str, language: str = "", variant: int = 0) -> str:
@@ -94,20 +201,15 @@ class DraftCache:
         raw = "\x1f".join([PROMPT_VERSION, norm, (language or "").lower(), str(variant)])
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:40]
 
-    def get(self, key: str) -> AIReport | None:
-        path = self.root / f"{key}.json"
-        if not path.exists():
-            return None
-        try:
-            return AIReport.model_validate_json(path.read_text(encoding="utf-8"))
-        except ValueError:
-            return None
 
-    def put(self, key: str, report: AIReport) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
-        tmp = self.root / f"{key}.tmp"
-        tmp.write_text(report.model_dump_json(), encoding="utf-8")
-        tmp.replace(self.root / f"{key}.json")
+class ExplainCache(KVCache):
+    def __init__(self, root: Path | None = None, db_url: str | None = None):
+        super().__init__("explain", AIExplain, root, db_url)
+
+    @staticmethod
+    def key(language: str, files: list) -> str:
+        raw = "\x1f".join([EXPLAIN_VERSION, language or ""] + [f"{f.name}\x1e{f.code}" for f in files])
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:40]
 
 
 # ── usage log ──────────────────────────────────────────────────────
@@ -170,7 +272,8 @@ def build_user_prompt(sheet: str, language: str = "", subject: str = "", variant
     if language and language != "auto":
         lines.append(f"Write the programs in: {language}")
     if variant:
-        lines.append(f"Variant {variant}: use different identifiers, demo data and wording from the usual answer.")
+        # A student asked for a fresh write-up because the first one had problems.
+        lines.append("Write this report again from scratch, carefully checking that every program is correct.")
     lines.append("Sheet:\n<<<\n" + sheet + "\n>>>")
     return "\n".join(lines)
 
@@ -221,12 +324,17 @@ class GeminiProvider:
                                         http_options=types.HttpOptions(timeout=int(TIMEOUT_SECONDS * 1000)))
         return self._client
 
-    def generate(self, sheet: str, language: str = "", subject: str = "", variant: int = 0) -> AIReport:
+    def generate(self, sheet: str, language: str = "", subject: str = "", variant: int = 0,
+                 cancel: Cancel | None = None) -> AIReport:
         prompt = build_user_prompt(sheet, language, subject, variant)
-        return self._call("draft", SYSTEM_PROMPT, prompt, AIReport, self.model, 0.7 if variant else 0.2)
+        return self._call("draft", SYSTEM_PROMPT, prompt, AIReport, self.model, 0.5 if variant else 0.2, cancel)
 
-    def fix(self, items: list[dict]) -> AIFixes:
-        return self._call("fix", FIX_PROMPT, json.dumps(items, ensure_ascii=False), AIFixes, self.fix_model, 0.1)
+    def fix(self, items: list[dict], cancel: Cancel | None = None) -> AIFixes:
+        return self._call("fix", FIX_PROMPT, json.dumps(items, ensure_ascii=False), AIFixes, self.fix_model, 0.1,
+                          cancel)
+
+    def explain(self, prompt: str, cancel: Cancel | None = None) -> AIExplain:
+        return self._call("explain", EXPLAIN_PROMPT, prompt, AIExplain, self.fix_model, 0.2, cancel)
 
     def _config(self, system: str, schema: type, temperature: float, model: str):
         from google.genai import types
@@ -245,12 +353,15 @@ class GeminiProvider:
                 cfg["thinking_config"] = types.ThinkingConfig(thinking_level=self.thinking)
         return types.GenerateContentConfig(**cfg)
 
-    def _call(self, kind: str, system: str, prompt: str, schema: type, model: str, temperature: float):
+    def _call(self, kind: str, system: str, prompt: str, schema: type, model: str, temperature: float,
+              cancel: Cancel | None = None):
         client = self._get_client()
         last: Exception | None = None
         for name in [model, *[m for m in self.fallbacks if m != model]]:
             attempt = 0
             while attempt < self.attempts:
+                if cancel and cancel.is_set():
+                    raise RetryableAIError("gemini: another provider answered first")
                 attempt += 1
                 try:
                     resp = client.models.generate_content(
@@ -271,7 +382,10 @@ class GeminiProvider:
                         attempt -= 1
                         continue
                     if code in (429, 500, 502, 503, 504) and attempt < self.attempts and "per day" not in msg:
-                        time.sleep(min(2 ** attempt, 8))
+                        if cancel:
+                            cancel.wait(min(2 ** attempt, 8))
+                        else:
+                            time.sleep(min(2 ** attempt, 8))
                         continue
                     break  # next model
         raise RetryableAIError(f"gemini failed: {str(last)[:200]}") from last
@@ -335,14 +449,19 @@ class OpenAICompatProvider:
     def configured(self) -> bool:
         return bool(self.api_key and self.base)
 
-    def generate(self, sheet: str, language: str = "", subject: str = "", variant: int = 0) -> AIReport:
+    def generate(self, sheet: str, language: str = "", subject: str = "", variant: int = 0,
+                 cancel: Cancel | None = None) -> AIReport:
         prompt = build_user_prompt(sheet, language, subject, variant)
-        return self._call("draft", SYSTEM_PROMPT, prompt, AIReport, 0.7 if variant else 0.2)
+        return self._call("draft", SYSTEM_PROMPT, prompt, AIReport, 0.5 if variant else 0.2, cancel)
 
-    def fix(self, items: list[dict]) -> AIFixes:
-        return self._call("fix", FIX_PROMPT, json.dumps(items, ensure_ascii=False), AIFixes, 0.1)
+    def fix(self, items: list[dict], cancel: Cancel | None = None) -> AIFixes:
+        return self._call("fix", FIX_PROMPT, json.dumps(items, ensure_ascii=False), AIFixes, 0.1, cancel)
 
-    def _call(self, kind: str, system: str, prompt: str, schema: type, temperature: float):
+    def explain(self, prompt: str, cancel: Cancel | None = None) -> AIExplain:
+        return self._call("explain", EXPLAIN_PROMPT, prompt, AIExplain, 0.2, cancel)
+
+    def _call(self, kind: str, system: str, prompt: str, schema: type, temperature: float,
+              cancel: Cancel | None = None):
         body: dict[str, Any] = {
             "model": self.model,
             "messages": [
@@ -358,13 +477,18 @@ class OpenAICompatProvider:
         headers = {"Authorization": f"Bearer {self.api_key}"}
         if self.name == "openrouter":
             headers["X-Title"] = "LabForge"
+        own_client = self.client is None
         client = self.client or httpx.Client(timeout=httpx.Timeout(TIMEOUT_SECONDS, connect=10))
+        if cancel and own_client:
+            cancel.on_cancel(client.close)  # another provider won: drop this request mid-flight
         try:
             resp = None
             for attempt in (1, 2, 3):
+                if cancel and cancel.is_set():
+                    raise RetryableAIError(f"{self.name}: another provider answered first")
                 try:
                     resp = client.post(f"{self.base}/chat/completions", json=body, headers=headers)
-                except httpx.HTTPError as exc:
+                except (httpx.HTTPError, RuntimeError) as exc:  # RuntimeError: client closed by cancel
                     raise RetryableAIError(f"{self.name} unreachable: {exc}") from exc
                 if resp.status_code == 400 and "response_format" in body and "response_format" in resp.text:
                     body.pop("response_format")  # model without JSON mode: rely on the prompt
@@ -374,11 +498,14 @@ class OpenAICompatProvider:
                         wait = float(resp.headers.get("retry-after", "2"))
                     except ValueError:
                         wait = 2
-                    time.sleep(min(wait, 6))
+                    if cancel:
+                        cancel.wait(min(wait, 6))
+                    else:
+                        time.sleep(min(wait, 6))
                     continue
                 break
         finally:
-            if self.client is None:
+            if own_client:
                 client.close()
         if resp is None or resp.status_code != 200:
             code = resp.status_code if resp is not None else "no response"
@@ -407,26 +534,31 @@ class ProviderChain:
         return [f"{p.name}:{p.model}" for p in self.providers]
 
     def generate(self, sheet: str, language: str = "", subject: str = "", variant: int = 0) -> AIReport:
-        report = self._each(lambda p: p.generate(sheet, language, subject, variant))
+        report = self._each(lambda p, c: p.generate(sheet, language, subject, variant, cancel=c))
         if not report.tasks:
             raise AIError("No tasks were found in this sheet. Check that it's the experiment sheet.")
         return report
 
     def fix(self, items: list[dict]) -> AIFixes:
-        return self._each(lambda p: p.fix(items))
+        return self._each(lambda p, c: p.fix(items, cancel=c))
+
+    def explain(self, prompt: str) -> AIExplain:
+        return self._each(lambda p, c: p.explain(prompt, cancel=c))
 
     def _each(self, call):
-        """Providers in order; a slow one gets company after HEDGE_SECONDS, a failed one is replaced at once."""
+        """Providers in order; a slow one gets company after HEDGE_SECONDS, a failed one is replaced at once.
+        As soon as one answers, the others are cancelled so they stop spending free quota."""
         if not self.providers:
             raise AIError("No AI provider is configured on the server, so new sheets can't be written yet.")
         errors: list[str] = []
         waiting = list(self.providers)
         running: dict = {}
+        cancel = Cancel()
         pool = ThreadPoolExecutor(max_workers=len(self.providers), thread_name_prefix="ai")
 
         def start():
             provider = waiting.pop(0)
-            running[pool.submit(call, provider)] = provider
+            running[pool.submit(call, provider, cancel)] = provider
 
         try:
             start()
@@ -445,6 +577,7 @@ class ProviderChain:
                         if waiting:
                             start()
         finally:
+            cancel.set()  # close the slower providers' open requests
             pool.shutdown(wait=False, cancel_futures=True)  # a slower provider's late answer is dropped
         print("[ai] all providers failed: " + " | ".join(errors))
         raise AIError("Every AI service is busy or out of free quota right now. Try again in a few minutes.")
@@ -462,7 +595,8 @@ class LocalProvider:
     def describe(self) -> list[str]:
         return ["local:offline"]
 
-    def generate(self, sheet: str, language: str = "", subject: str = "", variant: int = 0) -> AIReport:
+    def generate(self, sheet: str, language: str = "", subject: str = "", variant: int = 0,
+                 cancel: Cancel | None = None) -> AIReport:
         from core.ingestion.parser import parse_text
 
         doc = parse_text(sheet)
@@ -497,8 +631,11 @@ class LocalProvider:
             ],
         )
 
-    def fix(self, items: list[dict]) -> AIFixes:
+    def fix(self, items: list[dict], cancel: Cancel | None = None) -> AIFixes:
         return AIFixes(fixes=[])
+
+    def explain(self, prompt: str, cancel: Cancel | None = None) -> AIExplain:
+        raise AIError("Explanations need an AI provider. Set AI_MODE=cloud.")
 
 
 def _guess_stdin(code: str) -> str:

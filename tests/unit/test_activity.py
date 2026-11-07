@@ -1,3 +1,4 @@
+import json
 from core.activity import ActivityLog
 from core.ingestion.header import read_header, strip_personal
 
@@ -28,7 +29,8 @@ def test_sheet_header_fills_the_form_and_never_reaches_the_ai():
     assert read_header("Aim: print hello") == {}
 
 
-def test_reports_fold_reruns_downloads_and_feedback_into_one_entry(tmp_path):
+def test_reports_fold_reruns_downloads_and_feedback_into_one_entry(tmp_path, monkeypatch):
+    monkeypatch.setenv("LABFORGE_LOG_PERSONAL", "1")
     log = ActivityLog(db_url="", path=tmp_path / "a.jsonl")
     tasks = [{"title": "Easy", "language": "java", "status": "passed", "note": "", "output": "ok"},
              {"title": "Hard", "language": "java", "status": "not_run", "note": "Needs jakarta", "output": ""}]
@@ -47,3 +49,32 @@ def test_reports_fold_reruns_downloads_and_feedback_into_one_entry(tmp_path):
     assert one["feedback"]["rating"] == "down" and one["feedback"]["comment"] == "Hard is wrong"
     assert one["issue"]  # a thumbs down is an issue even when every program ran
     assert two["issue"] and two["tasks"][0]["note"] == "Needs jakarta" and two["feedback"] is None
+
+
+def test_names_uids_and_ips_stay_out_of_the_log_by_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("LABFORGE_LOG_PERSONAL", raising=False)
+    log = ActivityLog(db_url="", path=tmp_path / "a.jsonl")
+    log.record("render", "j1", name="Asha", uid="24BCS1", ip="1.2.3.4", sheet="x" * 9000, tasks=[])
+    log.flush()
+    raw = (tmp_path / "a.jsonl").read_text(encoding="utf-8")
+    assert "Asha" not in raw and "24BCS1" not in raw and "1.2.3.4" not in raw
+    row = json.loads(raw)
+    assert row["ip"].startswith("ip-") and len(row["sheet"]) == 2000
+
+
+def test_deleting_a_report_removes_its_log_rows(tmp_path):
+    log = ActivityLog(db_url="", path=tmp_path / "a.jsonl")
+    log.record("draft", "j1", tasks=[])
+    log.record("draft", "j2", tasks=[])
+    log.flush()
+    log.delete_job("j1")
+    assert [r["job"] for r in log.rows(days=1)] == ["j2"]
+
+
+def test_content_reports_flag_the_report(tmp_path):
+    log = ActivityLog(db_url="", path=tmp_path / "a.jsonl")
+    log.record("draft", "j1", tasks=[{"title": "A", "status": "passed"}], error="")
+    log.record("report", "j1", reason="offensive", comment="rude comment in code", task=0)
+    log.flush()
+    report = log.reports(days=1)[0]
+    assert report["issue"] and report["reports"][0]["reason"] == "offensive"

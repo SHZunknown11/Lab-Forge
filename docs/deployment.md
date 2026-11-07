@@ -63,41 +63,99 @@ untrusted. Layers already in place:
 - `EXEC_ALLOW_NETWORK=0` (the image default): programs only reach loopback.
   If the kernel allows unprivileged namespaces, each run gets a private
   network namespace; otherwise the Python, Node and Java launchers refuse
-  non-loopback connections. `GET /api/admin/status?token=...` shows which.
+  non-loopback connections. `GET /api/admin/status` with the `X-Admin-Token`
+  header shows which.
 - The image's app code is owned by root and read-only to the app user.
 - Screenshotted pages can only reach LabForge's own throwaway static server
   (outbound requests go to a dead proxy). Keep `HTML_ALLOW_NETWORK=0`.
 - Uploaded screenshots are re-encoded as PNG.
 - File names from the model can't leave the work folder.
 
+- Code the server wrote can be re-run with any input. Changed code (a
+  student's own edits, or anything else a browser sends) has its own, smaller
+  hourly limit, and changed shell scripts are never run.
+- Programs run in throwaway folders under `LABFORGE_RUN_DIR` (the system temp
+  folder), never inside a job folder, and the draft cache can live in Postgres
+  where programs can't write to it.
+
 For a public site, also do one of these:
 
-1. Run the container as in `docker-compose.yml`: unprivileged user, memory,
+1. **Recommended: a separate execution worker** (`EXEC_BACKEND=remote`). The
+   web server sends each program to `apps/worker` on another machine, so
+   student code never runs next to your API keys, the cache or other students'
+   reports. See "Execution worker" below.
+2. Run the container as in `docker-compose.yml`: unprivileged user, memory,
    CPU and process limits, `no-new-privileges`. The container is the boundary.
-2. Stronger: set `EXEC_BACKEND=docker` on a host with Docker, so each program
-   runs in its own container with `--network none`, `--cap-drop ALL`, 384 MB
-   and one CPU. Build a Python image with the scientific libraries and set
-   `EXEC_IMAGE_PYTHON` to it.
+3. Set `EXEC_BACKEND=docker` on a host with Docker, so each program runs in
+   its own container with `--network none`, `--cap-drop ALL`, 384 MB and one
+   CPU. Build a Python image with the scientific libraries and set
+   `EXEC_IMAGE_PYTHON` to it. (A worker can use this too:
+   `WORKER_EXEC_BACKEND=docker`.)
+
+## Execution worker
+
+Any small VM works (Hetzner, DigitalOcean, Oracle Cloud's free ARM VM, a
+spare machine behind Cloudflare Tunnel). Keep **no secrets** on it apart from
+the worker token.
+
+```bash
+# on the worker machine
+docker build -t labforge .
+docker run -d --restart unless-stopped --name labforge-worker -p 8100:8100 \
+  -e EXEC_WORKER_TOKEN=<random, 24+ characters> -e EXEC_ALLOW_NETWORK=0 \
+  --memory 2g --cpus 2 --pids-limit 512 --security-opt no-new-privileges \
+  labforge sh -c 'exec uvicorn apps.worker.main:app --host 0.0.0.0 --port 8100'
+```
+
+Then on the web server (Render) set:
+
+```
+EXEC_BACKEND=remote
+EXEC_WORKER_URL=https://worker.example.com   # put HTTPS in front (Caddy or Cloudflare Tunnel)
+EXEC_WORKER_TOKEN=<the same token>
+```
+
+`GET /api/admin/status` shows `exec_backend` and the runtimes the worker
+reports. If the worker is unreachable, programs come back as "not run" and
+students are asked for a screenshot; nothing runs on the web server.
+
+For the strongest isolation on the worker, give it Docker and set
+`WORKER_EXEC_BACKEND=docker` (one network-less container per program), or a
+kernel that allows unprivileged user namespaces so `EXEC_ALLOW_NETWORK=0`
+uses a private network namespace.
+
+## Postgres
+
+Set `LABFORGE_DATABASE_URL` (a free Neon database is enough; the old
+`LABFORGE_LOG_DB_URL` also works). It holds the draft cache, rate limits and
+the activity log, so a redeploy or restart on Render's wiped disk no longer
+throws away every cached sheet and resets every limit. Tables are created on
+first use.
 
 ## Token spend
 
-`GET /api/admin/usage?token=$LABFORGE_ADMIN_TOKEN&days=7` returns calls and
+`GET /api/admin/usage?days=7` with the header `X-Admin-Token: $LABFORGE_ADMIN_TOKEN` returns calls and
 input, cached, output and thinking tokens per model. Typical numbers with
 Gemini Flash: a new three-program sheet costs about 2k input and 2k output
 tokens; an uploaded-before sheet costs nothing.
 
 ## Activity panel
 
-Open `/admin` and enter `LABFORGE_ADMIN_TOKEN`. Each report shows the student's name and UID
-(from the sheet header, then from the fields when they download), the experiment, and every
-program's result with the reason it didn't run. Set `LABFORGE_LOG_DB_URL` to a Postgres URL
-(a free Neon database works) so the log survives restarts; without it the log lives in
-`artifacts/activity.jsonl`. Rows older than `LABFORGE_LOG_DAYS` (30) are deleted.
+Open `/admin` and enter `LABFORGE_ADMIN_TOKEN`. Each report shows the experiment, every
+program's result with the reason it didn't run, feedback and content reports (🚩). By default
+no names or UIDs are stored and IP addresses are kept only as a salted hash; set
+`LABFORGE_LOG_PERSONAL=1` to keep names and UIDs (the privacy page then says so
+automatically). With `LABFORGE_DATABASE_URL` the log survives restarts; without it the log
+lives in `artifacts/activity.jsonl`. Rows older than `LABFORGE_LOG_DAYS` (14) are deleted, and a
+student who deletes their report deletes its rows too.
 
 ## Ads (Google AdSense)
 
-1. Get approved: AdSense wants a live domain with real content. The About and
-   Privacy pages (`#/about`, `#/privacy`) are already there; keep them.
+1. Get approved: AdSense wants your own domain (not `onrender.com`) with real
+   content. The site has real pages for crawlers: `/guide`, `/faq`, `/about`,
+   `/privacy` and `/terms`, each with its own title, plus `/robots.txt` and
+   `/sitemap.xml`. Set `LABFORGE_PUBLIC_URL` to the domain, and build with
+   `VITE_CONTACT_EMAIL` so the privacy page has a real contact address.
 2. Create two display units (a 300x250 rectangle for the sidebar, a responsive
    horizontal unit under the page) and build with:
 
@@ -108,8 +166,8 @@ program's result with the reason it didn't run. Set `LABFORGE_LOG_DB_URL` to a P
    docker compose up -d --build
    ```
 
-3. Add `apps/frontend/public/ads.txt` containing
-   `google.com, pub-XXXXXXXXXXXXXXXX, DIRECT, f08c47fec0942fa0` and rebuild.
+3. Set `ADSENSE_CLIENT=ca-pub-XXXXXXXXXXXXXXXX` on the server: `/ads.txt` is
+   served from it automatically.
 4. In the EU/UK, AdSense requires a consent banner: enable Google's CMP in the
    AdSense dashboard (Privacy & messaging).
 

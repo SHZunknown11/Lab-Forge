@@ -10,7 +10,10 @@ def show(cols, rows):
     cells = [[("NULL" if v is None else str(v)) for v in r] for r in rows]
     widths = [max([len(str(c))] + [len(r[i]) for r in cells]) for i, c in enumerate(cols)]
     bar = "+" + "+".join("-" * (w + 2) for w in widths) + "+"
-    line = lambda vals: "| " + " | ".join(v.ljust(w) for v, w in zip(vals, widths)) + " |"
+
+    def line(vals):
+        return "| " + " | ".join(v.ljust(w) for v, w in zip(vals, widths)) + " |"
+
     print(bar)
     print(line([str(c) for c in cols]))
     print(bar)

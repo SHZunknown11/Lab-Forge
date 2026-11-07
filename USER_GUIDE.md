@@ -1,55 +1,42 @@
-# LabForge User Guide
+# LabForge user guide
 
-Welcome to **LabForge**, your automated companion for generating Java programming lab reports! LabForge takes your rough notes and code, compiles the code to verify it works, uses AI to write theoretical sections and explanations, and produces a perfectly formatted DOCX lab report.
+LabForge turns an experiment sheet into a lab report: aim, objectives, code, the output the code
+really printed, and learning outcomes, laid out the way your college asks for it. The same guide
+is on the website at `/guide`, with answers to common questions at `/faq`.
 
-This guide will walk you through how to use the new Web Interface to generate your reports quickly and easily.
+## On the website
 
-## Prerequisites
+1. **Your details.** Fill in your name, UID, branch, section and semester once. They're saved in
+   your browser. Pick a report format: plain, or the CSE layout that follows the department's
+   sample report.
+2. **The sheet.** Upload the experiment sheet (PDF, Word, PowerPoint, text, or a .zip of your
+   project) or paste its text, choose the language if the sheet doesn't say, and press
+   **Write my report**.
+3. **Wait for the programs.** Every program is compiled and run on the server. Java and Spring can
+   take a minute or two. You can leave the page; the report keeps being written and comes back when
+   you return.
+4. **Check each task.** Read the code. Use **Explain this code** for a walkthrough and practice viva
+   questions. If you change the code or the input, press **Run the changed code**: the output can't
+   be typed in, it's always what the program printed. Programs that need a window, hardware or
+   software the server doesn't have ask for your own screenshot.
+5. **Download.** The Word file is made automatically; press **Make the PDF** for a PDF and page
+   previews. When you're done you can **Delete this report from the server**.
 
-Before using the Web Interface, you need to ensure your profile is set up. If you haven't done this yet, open your terminal and run:
+Something wrong with a report? Use the thumbs down, or **Report a problem with this content**.
 
-```bash
-python labforge.py setup
+## On the command line
+
+Set your details once, then write reports from sheets on disk:
+
+```powershell
+labforge profile set --name "Your Name" --uid 24BCS00000 --branch BE-CSE --section 719-A --semester 5th --university "Chandigarh University"
+labforge generate --source "EXP-2.1.pdf" --subject "Competitive Coding - II" --code 24CSP-305
+labforge batch --dir "C:\Users\me\Desktop\cc sem5" --subject "Competitive Coding - II" --skip-existing
+labforge doctor
 ```
 
-This CLI command will prompt you for your name, roll number, and subject configurations, saving them to `.config/profile.yaml`.
+## Use it honestly
 
-## Starting the Web Interface
-
-1. Open your terminal or command prompt.
-2. Navigate to the LabForge project directory.
-3. Start the web server using Uvicorn:
-   ```bash
-   uvicorn apps.api.main:app --reload
-   ```
-4. Open your web browser and go to: [http://localhost:8000](http://localhost:8000)
-
-## Using the Dashboard
-
-When you open the web interface, you'll see a sleek dashboard with three main sections.
-
-### 1. Current Profile & Subject Setup
-- **Current Profile:** Displays your configured name, roll number, and batch.
-- **Subject Setup:** Use the dropdown menu to select the subject for which you want to generate a report.
-
-### 2. Generate Report
-This is where the magic happens!
-- **Upload Notes:** Click the dashed upload area to select your `source-notes.md` file, or simply drag and drop the file directly into the box.
-  *(Note: Your source file should contain your Java code block and any notes you want the AI to incorporate).*
-- **Force Refresh (Optional):** Check this box if you want to bypass the AI cache and force LabForge to generate a brand new response from the AI provider.
-- **Generate:** Once a subject is selected and a file is uploaded, click the **Generate Report** button.
-
-### 3. Generation Complete
-While generating, a loading screen will appear. Once finished, the Results Panel will display:
-- **Experiment Number:** The detected experiment number.
-- **Compilation Status:** Indicates if your Java code compiled and executed successfully.
-- **AI Generation Status:** Indicates if the AI successfully generated the theoretical content.
-- **Download Buttons:** Click "Download DOCX" to save your generated lab report!
-
-## Troubleshooting
-
-- **"Failed to load configuration"**: Ensure you have run the CLI setup first.
-- **"Compilation Failed"**: The AI attempts to fix minor syntax errors, but if your code has major issues, LabForge might fail to compile it. Check your `source-notes.md` code blocks.
-- **Missing API Keys**: LabForge uses AI to write the reports. Make sure your `.env` file is properly configured with your chosen provider's API key.
-
-Happy forging!
+LabForge saves you formatting and screenshot work. Read and run the code yourself, make sure you
+can explain it in your viva, and follow your institution's rules on what you may submit.
+LabForge isn't affiliated with any university.

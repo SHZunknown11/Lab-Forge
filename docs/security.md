@@ -28,6 +28,26 @@ every program as untrusted.
 - **Spoof-resistant visitor IPs**: with `LABFORGE_TRUST_PROXY=<hops>` only the
   addresses your own proxies appended to `X-Forwarded-For` count.
 
+- **Programs can't be fed arbitrary code for free.** The server remembers the
+  code it wrote for each task. Re-running that code with any input is a normal
+  run; changed code counts against a separate, small hourly limit, and changed
+  shell scripts are refused. Limits are per browser and per IP, in Postgres.
+- **Output can't be invented.** Run results are stored on the server. A
+  rendered report always takes its console output, status and captured figures
+  from there, for the exact code and input that produced them; whatever output
+  a browser sends is ignored. Changed code has no output until it runs again.
+- **Runs happen outside job folders** (`LABFORGE_RUN_DIR`), so relative paths
+  can't reach a report's files, and the draft cache lives in Postgres when
+  `LABFORGE_DATABASE_URL` is set.
+- **Separate execution worker** (`EXEC_BACKEND=remote`, `apps/worker`): the
+  real fix for everything below. Student code then never runs on the web server.
+- **Admin token only in a header**, never in URLs (which end up in logs).
+- **Security headers**: a strict, nonce-based Content-Security-Policy on pages
+  (compatible with AdSense), `X-Frame-Options: DENY`, `Permissions-Policy`,
+  HSTS behind HTTPS.
+- **Minimal logging**: no names or UIDs by default, IPs hashed, only the start
+  of each sheet, 14 days; students can delete a report and its log rows.
+
 ## Known limits on single-container hosts
 
 On hosts without nested containers (Hugging Face Spaces, Render, Koyeb),
@@ -41,7 +61,6 @@ and `EXEC_BACKEND=docker` for a hard boundary.
 ## Required for a public deployment
 
 `EXEC_BACKEND=local` runs programs as the server's user, which is fine on your
-own machine and not enough on the internet. Run the provided container
-(unprivileged user, memory, CPU and process limits) or use
-`EXEC_BACKEND=docker` for one network-less container per run. See
-[deployment.md](deployment.md).
+own machine and not enough on the internet. Use `EXEC_BACKEND=remote` with a
+worker on a separate machine (best), or `EXEC_BACKEND=docker` for one
+network-less container per run. See [deployment.md](deployment.md).

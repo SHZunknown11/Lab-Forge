@@ -1,6 +1,6 @@
 import { useRef, useState, type KeyboardEvent } from "react"
-import { fileUrl } from "../api"
-import type { Draft, Meta, Task } from "../types"
+import { explainTask, fileUrl } from "../api"
+import type { Draft, Explanation, Meta, Task } from "../types"
 
 interface Props {
   draft: Draft
@@ -60,12 +60,15 @@ export function Review({ draft, jobId, meta, busy, uploading, live, onChange, on
                 onClick={() => setOpen(expanded ? null : i)}
               >
                 <span className="task__name">{t.title || `Task ${i + 1}`}</span>
-                <span className="task__status">{busy[i] ? busy[i] : STATUS[live[i] ?? t.status]}</span>
+                <span className="task__status">
+                  {busy[i] ? busy[i] : t.stale && !live[i] ? "Changed: run it again" : STATUS[live[i] ?? t.status]}
+                </span>
               </button>
               {t.note && !busy[i] && <p className="task__note">{t.note}</p>}
               {expanded && (
                 <TaskEditor
                   task={t}
+                  index={i}
                   jobId={jobId}
                   meta={meta}
                   busy={!!busy[i]}
@@ -90,9 +93,9 @@ export function Review({ draft, jobId, meta, busy, uploading, live, onChange, on
 
       <div className="rewrite">
         <button type="button" className="btn btn--quiet" onClick={onRewrite} disabled={rewriting}>
-          {rewriting ? "Writing a new version…" : "Write a different version"}
+          {rewriting ? "Writing it again…" : "Something's wrong? Write it again"}
         </button>
-        <p className="hint">Different code and wording, so your report doesn't match a classmate's. Uses one of your daily sheets.</p>
+        <p className="hint">Writes the whole report again from the sheet. Uses one of your daily sheets.</p>
       </div>
     </div>
   )
@@ -100,6 +103,7 @@ export function Review({ draft, jobId, meta, busy, uploading, live, onChange, on
 
 function TaskEditor(props: {
   task: Task
+  index: number
   jobId: string
   meta: Meta
   busy: boolean
@@ -161,10 +165,17 @@ function TaskEditor(props: {
         </p>
       )}
 
+      {task.stale && !props.busy && (
+        <p className="hint" role="status">
+          You changed the code or input, so the old output no longer matches it.{" "}
+          {runnable ? "Run it again to get the new output." : "Add a new screenshot of the output."}
+        </p>
+      )}
+
       <div className="task__actions">
         {runnable && (
           <button type="button" className="btn btn--secondary" onClick={props.onRun} disabled={props.busy}>
-            {props.busy ? "Running…" : "Run again"}
+            {props.busy ? "Running…" : task.stale ? "Run the changed code" : "Run again"}
           </button>
         )}
         <button type="button" className="btn btn--secondary" onClick={() => upload.current?.click()} disabled={props.uploading}>
@@ -182,6 +193,8 @@ function TaskEditor(props: {
           }}
         />
       </div>
+
+      {task.files.some((f) => f.code.trim()) && <Explain task={task} index={props.index} jobId={props.jobId} />}
 
       {(task.output || task.images.length > 0) && (
         <div className="task__outputs">
@@ -210,6 +223,73 @@ function TaskEditor(props: {
                 </li>
               ))}
             </ul>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** How the program works and likely viva questions, so the student can explain their own report. */
+function Explain({ task, index, jobId }: { task: Task; index: number; jobId: string }) {
+  const [data, setData] = useState<Explanation | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState("")
+  const [open, setOpen] = useState(false)
+
+  async function load() {
+    setOpen(true)
+    if (data) return
+    setLoading(true)
+    setError("")
+    try {
+      setData(await explainTask(jobId, index, task))
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="explain">
+      {!open ? (
+        <button type="button" className="btn btn--quiet" onClick={load}>
+          Explain this code and practise viva questions
+        </button>
+      ) : (
+        <div className="explain__body">
+          <div className="row row--between">
+            <strong>Understand your program</strong>
+            <button type="button" className="link link--muted" onClick={() => setOpen(false)}>
+              Hide
+            </button>
+          </div>
+          {loading && <p className="hint" role="status">Reading the code…</p>}
+          {error && <p className="alert" role="alert">{error}</p>}
+          {data && (
+            <>
+              <p>{data.summary}</p>
+              {data.steps.length > 0 && (
+                <ol className="explain__steps">
+                  {data.steps.map((s, i) => (
+                    <li key={i}>{s}</li>
+                  ))}
+                </ol>
+              )}
+              {data.viva.length > 0 && (
+                <>
+                  <p className="explain__label">Likely viva questions (try answering before you open each one)</p>
+                  {data.viva.map((v, i) => (
+                    <details key={i} className="explain__q">
+                      <summary>{v.q}</summary>
+                      <p>{v.a}</p>
+                    </details>
+                  ))}
+                </>
+              )}
+              <p className="hint">Written by AI from your code. Check anything you're unsure about.</p>
+            </>
           )}
         </div>
       )}

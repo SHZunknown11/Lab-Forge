@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { sendFeedback } from "../api"
+import { reportContent, sendFeedback, type ReportReason } from "../api"
 
 const REASONS = ["Output missing", "Wrong output", "Code is wrong", "Formatting", "My details are wrong", "Too slow"]
 
@@ -41,9 +41,12 @@ export function Feedback({ jobId }: { jobId: string }) {
 
   if (sent) {
     return (
-      <p className="feedback feedback--done" role="status">
-        {rating === "up" ? "Thanks! Glad it worked." : "Thanks for telling us. We'll look into it."}
-      </p>
+      <>
+        <p className="feedback feedback--done" role="status">
+          {rating === "up" ? "Thanks! Glad it worked." : "Thanks for telling us. We'll look into it."}
+        </p>
+        <ReportContent jobId={jobId} />
+      </>
     )
   }
 
@@ -92,6 +95,67 @@ export function Feedback({ jobId }: { jobId: string }) {
         </form>
       )}
       {error && <p className="alert" role="alert">{error}</p>}
+      <ReportContent jobId={jobId} />
     </div>
+  )
+}
+
+const REPORT_REASONS: { id: ReportReason; label: string }[] = [
+  { id: "offensive", label: "Offensive or inappropriate" },
+  { id: "unsafe", label: "Harmful or unsafe code" },
+  { id: "wrong", label: "Wrong or misleading" },
+  { id: "copyright", label: "Copies someone else's work" },
+  { id: "other", label: "Something else" },
+]
+
+/** Flag AI-written content for the site owner to review (required for AI apps on Google Play). */
+export function ReportContent({ jobId }: { jobId: string }) {
+  const [open, setOpen] = useState(false)
+  const [reason, setReason] = useState<ReportReason>("offensive")
+  const [comment, setComment] = useState("")
+  const [state, setState] = useState<"idle" | "sending" | "sent">("idle")
+  const [error, setError] = useState("")
+
+  if (state === "sent") return <p className="hint" role="status">Reported. Thank you, we'll review it.</p>
+  if (!open) {
+    return (
+      <button type="button" className="link link--muted feedback__report" onClick={() => setOpen(true)}>
+        Report a problem with this content
+      </button>
+    )
+  }
+  return (
+    <form className="feedback__why" onSubmit={async (e) => {
+      e.preventDefault()
+      setState("sending")
+      setError("")
+      try {
+        await reportContent(jobId, { reason, comment: comment.trim(), task: null })
+        setState("sent")
+      } catch (err) {
+        setError((err as Error).message)
+        setState("idle")
+      }
+    }}>
+      <label className="field">
+        <span>What's the problem?</span>
+        <select value={reason} onChange={(e) => setReason(e.target.value as ReportReason)}>
+          {REPORT_REASONS.map((r) => (
+            <option key={r.id} value={r.id}>{r.label}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span>Details (optional)</span>
+        <textarea rows={2} maxLength={1000} value={comment} onChange={(e) => setComment(e.target.value)} />
+      </label>
+      <div className="row">
+        <button className="btn btn--secondary" type="submit" disabled={state === "sending"}>
+          {state === "sending" ? "Sending…" : "Send report"}
+        </button>
+        <button type="button" className="link link--muted" onClick={() => setOpen(false)}>Cancel</button>
+      </div>
+      {error && <p className="alert" role="alert">{error}</p>}
+    </form>
   )
 }

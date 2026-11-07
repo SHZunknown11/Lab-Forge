@@ -15,7 +15,7 @@ def client(monkeypatch):
     monkeypatch.setenv("GOTENBERG_URL", "")
     from apps.api import main
 
-    main.limiter._hits.clear()
+    main.limiter.clear()
     return TestClient(main.app)
 
 
@@ -109,6 +109,7 @@ def test_activity_log_shows_who_made_the_report(client, monkeypatch, tmp_path):
     from apps.api import main
     from core.activity import ActivityLog
 
+    monkeypatch.setenv("LABFORGE_LOG_PERSONAL", "1")  # the owner opted in to names and UIDs
     monkeypatch.setattr(main, "activity", ActivityLog(db_url="", path=tmp_path / "activity.jsonl"))
     monkeypatch.setenv("LABFORGE_ADMIN_TOKEN", "secret-key")
     events = draft(client)

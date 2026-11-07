@@ -8,6 +8,8 @@ so the student attaches their own screenshot. Output is never invented.
 Backends
   EXEC_BACKEND=local   subprocess in a temp folder with a scrubbed environment (development)
   EXEC_BACKEND=docker  throwaway container per run: no network, CPU/memory/pid limits
+  EXEC_BACKEND=remote  send each program to a separate execution worker (apps/worker) at
+                       EXEC_WORKER_URL, so student code never runs on the web server
                        (use for any public deployment; see docs/deployment.md)
 
 EXEC_ALLOW_NETWORK=0 keeps programs off the internet: in a private network
@@ -18,6 +20,7 @@ most LABFORGE_MAX_PARALLEL_RUNS programs run at once.
 """
 from __future__ import annotations
 
+import base64
 import functools
 import http.server
 import os
@@ -165,8 +168,14 @@ class CodeRunner:
         self.python = os.environ.get("EXEC_PYTHON") or _bundled_python() or shutil.which("python") or sys.executable
 
     # ── capability report ──────────────────────────────────────────
-    @functools.cached_property
+    @property
     def _caps(self) -> dict[str, bool]:
+        if self.backend == "remote":
+            return _remote_caps()
+        return self._local_caps
+
+    @functools.cached_property
+    def _local_caps(self) -> dict[str, bool]:
         node = shutil.which("node") is not None
         if self.backend == "docker":
             docker = shutil.which("docker") is not None
@@ -197,6 +206,8 @@ class CodeRunner:
         files = [CodeFile(name=safe_rel(f.name, language), code=f.code) for f in files if f.code.strip()]
         if not files:
             return RunResult(status="not_run", note="There's no code to run.")
+        if self.backend == "remote":
+            return _run_remote(language, files, stdin, workdir)
         if not self._caps.get(language, False):
             label = LANGUAGE_LABELS.get(language, language)
             return RunResult(status="not_run", note=(
@@ -328,7 +339,7 @@ class CodeRunner:
         return result
 
     def _run_sql(self, files: list[CodeFile], stdin: str, wd: Path) -> RunResult:
-        paths = self._write(files, wd)
+        self._write(files, wd)
         shutil.copy(HARNESS / "lf_sql.py", wd / "lf_sql.py")
         # One script: the files are run in order, so a schema file followed by queries still works.
         (wd / "all.sql").write_text("\n".join(f.code for f in files), encoding="utf-8")
@@ -501,6 +512,72 @@ class CodeRunner:
             return RunResult(status="failed", output=output, retryable=True,
                              note=f"The program stopped with an error (exit code {proc.code}).")
         return RunResult(status="passed", output=output)
+
+
+
+# ── remote execution worker ───────────────────────────────────────
+
+def _worker() -> tuple[str, str]:
+    return (os.environ.get("EXEC_WORKER_URL", "").rstrip("/"), os.environ.get("EXEC_WORKER_TOKEN", ""))
+
+
+_caps_cache: dict = {"at": 0.0, "caps": {}}
+_caps_lock = threading.Lock()
+
+
+def _remote_caps() -> dict[str, bool]:
+    """What the worker can run, asked at most every 5 minutes (none while it's unreachable)."""
+    with _caps_lock:
+        if time.time() - _caps_cache["at"] < 300 and _caps_cache["caps"]:
+            return dict(_caps_cache["caps"])
+    url, token = _worker()
+    caps: dict[str, bool] = {}
+    if url:
+        try:
+            import httpx
+
+            r = httpx.get(f"{url}/capabilities", headers={"X-Worker-Token": token}, timeout=10)
+            if r.status_code == 200:
+                caps = {k: bool(v) for k, v in r.json().items()}
+        except Exception as exc:  # noqa: BLE001
+            print(f"[runner] worker unreachable: {type(exc).__name__}: {exc}")
+    with _caps_lock:
+        _caps_cache.update(at=time.time() if caps else 0.0, caps=caps)
+    return dict(caps)
+
+
+def _run_remote(language: str, files: list[CodeFile], stdin: str, workdir: Path) -> RunResult:
+    url, token = _worker()
+    if not url:
+        return RunResult(status="not_run", note="Programs can't be run right now. Add a screenshot of the output.")
+    try:
+        import httpx
+
+        with RUN_SLOTS:  # don't flood the worker from one web instance
+            r = httpx.post(f"{url}/run", headers={"X-Worker-Token": token}, timeout=scaled(240),
+                           json={"language": language, "stdin": stdin,
+                                 "files": [{"name": f.name, "code": f.code} for f in files]})
+    except Exception as exc:  # noqa: BLE001
+        print(f"[runner] worker call failed: {type(exc).__name__}: {exc}")
+        return RunResult(status="not_run", retryable=False,
+                         note="The program runner is busy or offline. Try again in a minute, or add a screenshot.")
+    if r.status_code != 200:
+        return RunResult(status="not_run", note=f"The program runner answered {r.status_code}. Try again later.")
+    data = r.json()
+    figures = []
+    for n, b64 in enumerate(data.get("figures", [])[:12], start=1):
+        path = workdir / f"figure_{n:02d}.png"
+        try:
+            raw = base64.b64decode(b64, validate=True)
+        except ValueError:
+            continue
+        if not raw.startswith(b"\x89PNG"):
+            continue  # only PNGs come back from the worker
+        path.write_bytes(raw)
+        figures.append(str(path))
+    status = data.get("status") if data.get("status") in ("passed", "failed", "not_run") else "not_run"
+    return RunResult(status=status, output=_clip(str(data.get("output", ""))), note=str(data.get("note", ""))[:500],
+                     retryable=bool(data.get("retryable")), figures=figures)
 
 
 def prepare_java(code: str) -> tuple[str, str, str | None]:

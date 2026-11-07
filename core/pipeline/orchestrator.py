@@ -7,10 +7,13 @@ render: draft + student fields -> DOCX (+ PDF and page previews); no model call
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import random
 import re
 import shutil
+import tempfile
 import threading
 import time
 import uuid
@@ -29,6 +32,9 @@ from core.validation.pdf_renderer import PdfPreviewRenderer
 
 ROOT = Path(__file__).resolve().parents[2]
 JOBS_ROOT = Path(os.environ.get("LABFORGE_JOBS_DIR", ROOT / "artifacts" / "jobs"))
+# Programs run in throwaway folders here, never inside a job folder, so a program can't reach a
+# report's files (or a neighbour's) with a relative path.
+RUN_ROOT = Path(os.environ.get("LABFORGE_RUN_DIR", Path(tempfile.gettempdir()) / "labforge-runs"))
 JOB_ID = re.compile(r"^[a-f0-9]{32}$")
 FILE_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
 CONSOLE_PPI = 192  # console PNGs are drawn at 2x
@@ -67,6 +73,16 @@ def job_file(job_id: str, name: str, render_id: str = "") -> Path | None:
 
 
 def purge_old_jobs(max_age_hours: float) -> int:
+    # Run folders left behind by a crash: nothing should live there for more than a few minutes.
+    if RUN_ROOT.exists():
+        stale = time.time() - 3600
+        for path in RUN_ROOT.iterdir():
+            try:
+                if path.is_dir() and path.stat().st_mtime < stale:
+                    unlink_node_modules(path)
+                    shutil.rmtree(path, ignore_errors=True)
+            except OSError:
+                continue
     if not JOBS_ROOT.exists():
         return 0
     cutoff = time.time() - max_age_hours * 3600
@@ -136,6 +152,7 @@ def build_draft(
         yield {"type": "stage", "stage": "write", "text": "Found this sheet already written, reusing it"}
 
     draft = to_draft(report)
+    remember_generated(job_dir, draft)
     yield {"type": "draft", "draft": draft.model_dump()}
 
     yield {"type": "stage", "stage": "run", "text": "Compiling and running each program"}
@@ -163,6 +180,7 @@ def build_draft(
                 draft.tasks[fx.index].stdin = fx.stdin
                 changed.append(fx.index)
         if changed:
+            remember_generated(job_dir, draft)
             fixed = yield from _run_all(draft, job_dir, runner, changed)
             if not fresh and any(r.status == "passed" for r in fixed.values()):
                 for i in changed:
@@ -209,7 +227,7 @@ def _run_all(draft: ReportDraft, job_dir: Path, runner: CodeRunner, indexes) -> 
 def run_task(job_dir: Path, index: int, task: Task, runner: CodeRunner | None = None) -> RunResult:
     """Run `task` and write the result (output, status, note, figures) back onto it."""
     runner = runner or CodeRunner()
-    work = job_dir / f".run_{index}_{uuid.uuid4().hex[:6]}"
+    work = RUN_ROOT / uuid.uuid4().hex
     try:
         result = runner.run(task.language, task.files, task.stdin, work)
         # Captured figures replace earlier captured figures; uploads are kept.
@@ -228,10 +246,102 @@ def run_task(job_dir: Path, index: int, task: Task, runner: CodeRunner | None = 
         task.status = result.status
         task.note = result.note
         task.images = figures + kept
+        save_result(job_dir, index, task, figures)
         return result
     finally:
         unlink_node_modules(work)  # never follow the junction into the shared runtime
         shutil.rmtree(work, ignore_errors=True)
+
+
+# ── what the server ran ────────────────────────────────────────────
+# The report's output always comes from these files, never from what a browser sends back,
+# so the console text and screenshots in a report are what the program really printed.
+
+_state_lock = threading.Lock()
+
+
+def _norm_code(code: str) -> str:
+    return "\n".join(line.rstrip() for line in code.replace("\r\n", "\n").split("\n")).strip()
+
+
+def code_key(task: Task) -> str:
+    """The program itself: language and files (not the input typed into it)."""
+    h = hashlib.sha256((task.language or "").encode())
+    for f in task.files:
+        if f.code.strip():
+            h.update(b"\x1f" + f.name.strip().encode() + b"\x1e" + _norm_code(f.code).encode())
+    return h.hexdigest()[:32]
+
+
+def run_key(task: Task) -> str:
+    """The program and its input: the output belongs to exactly this."""
+    stdin = task.stdin.replace("\r\n", "\n").rstrip("\n")
+    return hashlib.sha256((code_key(task) + "\x1f" + stdin).encode()).hexdigest()[:32]
+
+
+def _read_json(path: Path, default):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+
+
+def _write_json(path: Path, data) -> None:
+    tmp = path.with_suffix(f".{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+def remember_generated(job_dir: Path, draft: ReportDraft) -> None:
+    """Code the server wrote (or fixed) for each task. Running it again with any input is a normal run;
+    changed code counts as an edited run, which has a tighter limit."""
+    with _state_lock:
+        path = job_dir / "generated.json"
+        known: dict = _read_json(path, {})
+        for i, t in enumerate(draft.tasks):
+            keys = known.setdefault(str(i), [])
+            key = code_key(t)
+            if key not in keys:
+                keys.append(key)
+        _write_json(path, known)
+
+
+def is_generated(job_dir: Path, index: int, task: Task) -> bool:
+    known = _read_json(job_dir / "generated.json", {})
+    return code_key(task) in known.get(str(index), [])
+
+
+def save_result(job_dir: Path, index: int, task: Task, figures: list[str]) -> None:
+    with _state_lock:
+        path = job_dir / "results.json"
+        results: dict = _read_json(path, {})
+        results[str(index)] = {"key": run_key(task), "status": task.status, "output": task.output,
+                               "note": task.note, "figures": figures}
+        _write_json(path, results)
+
+
+def apply_results(job_dir: Path, draft: ReportDraft) -> list[str]:
+    """Put the server's own run results on `draft`, replacing whatever the browser sent.
+
+    Output only counts for the exact code and input that produced it; changed code gets no output
+    until it is run again. Returns warnings for the student.
+    """
+    results: dict = _read_json(job_dir / "results.json", {})
+    warnings = []
+    for i, task in enumerate(draft.tasks):
+        res = results.get(str(i))
+        uploads = {n for n in task.images if n.startswith("up_") and FILE_NAME.match(n) and (job_dir / n).is_file()}
+        if res and res.get("key") == run_key(task):
+            task.output, task.status, task.note = res.get("output", ""), res.get("status", "not_run"), res.get("note", "")
+            allowed = uploads | {n for n in res.get("figures", []) if (job_dir / n).is_file()}
+        else:
+            if res and task.files:
+                warnings.append(f"{task.title or f'Task {i + 1}'}: the code or input changed after it ran. "
+                                "Run it again so the output matches.")
+            task.output, task.status, task.note = "", "not_run", ""
+            allowed = uploads
+        task.images = [n for n in task.images if n in allowed]
+    return warnings
 
 
 # ── render ─────────────────────────────────────────────────────────
@@ -246,8 +356,8 @@ def render_report(job_dir: Path, req: RenderRequest) -> dict:
     out.mkdir(parents=True)
 
     draft = req.draft
+    warnings: list[str] = apply_results(job_dir, draft)
     task_images: list[list[tuple[Path, float]]] = []
-    warnings: list[str] = []
     for i, task in enumerate(draft.tasks):
         images: list[tuple[Path, float]] = []
         own = [job_dir / n for n in task.images if FILE_NAME.match(n) and (job_dir / n).is_file()]

@@ -122,10 +122,14 @@ class _Fake:
     def __init__(self, name, delay=0.0, fail=False):
         self.name, self.delay, self.fail = name, delay, fail
 
-    def fix(self, items):
+    def fix(self, items, cancel=None):
         import time
 
-        time.sleep(self.delay)
+        self.cancel = cancel
+        if cancel:
+            cancel.wait(self.delay)
+        else:
+            time.sleep(self.delay)
         if self.fail:
             raise RetryableAIError(f"{self.name} down")
         return self.name
@@ -150,3 +154,35 @@ def test_failed_provider_hands_over_at_once_and_all_failing_is_an_error(monkeypa
     assert ProviderChain([_Fake("a", fail=True), _Fake("b")]).fix([]) == "b"
     with pytest.raises(AIError):
         ProviderChain([_Fake("a", fail=True), _Fake("b", fail=True)]).fix([])
+
+
+def test_the_losing_provider_is_cancelled(monkeypatch):
+    from core.ai import provider as mod
+
+    monkeypatch.setattr(mod, "HEDGE_SECONDS", 0.1)
+    slow, fast = _Fake("slow", delay=5), _Fake("fast", delay=0.2)
+    assert ProviderChain([slow, fast]).fix([]) == "fast"
+    assert slow.cancel.is_set()
+
+
+def test_cancel_closes_an_open_http_request(monkeypatch):
+    import threading
+
+    from core.ai.provider import Cancel
+
+    closed = threading.Event()
+    cancel = Cancel()
+    cancel.on_cancel(closed.set)
+    assert not closed.is_set()
+    cancel.set()
+    assert closed.is_set()
+    late = threading.Event()
+    cancel.on_cancel(late.set)  # registered after the race ended: runs at once
+    assert late.is_set()
+
+
+def test_rewrite_prompt_doesnt_ask_to_disguise_the_answer():
+    from core.ai.provider import build_user_prompt
+
+    prompt = build_user_prompt("Aim: x", variant=7).lower()
+    assert "different identifiers" not in prompt and "from the usual answer" not in prompt

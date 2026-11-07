@@ -19,7 +19,11 @@ screenshots and learning outcomes, laid out the way your college wants it.
 - **Cheap to run.** One model call per new sheet, cached by content, so a whole
   class uploading the same sheet costs one call. Changing your name, date or
   subject never calls the model. Free-tier providers fail over automatically.
-- **No accounts.** Details stay in the browser. Ad-supported (AdSense slots built in).
+- **No accounts.** Your details are saved in your browser and sent only when the
+  Word or PDF file is made. Reports are deleted after a few hours, or at once
+  with "Delete this report from the server". Ad-supported (AdSense slots built in).
+- **Understand it, don't just submit it.** "Explain this code" walks through
+  each program and offers likely viva questions with answers.
 
 ## Run it locally
 
@@ -67,7 +71,10 @@ sheet ─► extract text ─► condense (drop tutorial text, links, boilerplat
 | `core/execution/runner.py` | Runs Java, Python, Node, React, HTML, C/C++ with scrubbed env and timeouts |
 | `core/documents/` | Template-driven DOCX writer, PDF via LibreOffice or Gotenberg |
 | `core/pipeline/orchestrator.py` | Draft, re-run and render steps |
-| `apps/api/main.py` | HTTP API (streams progress as NDJSON), per-IP limits, serves the app |
+| `apps/api/main.py` | HTTP API (progress as NDJSON, resumable), limits, security headers, serves the app |
+| `apps/worker/main.py` | Execution worker: runs programs on a separate machine (`EXEC_BACKEND=remote`) |
+| `core/pipeline/jobs.py` | Reports are written in the background; a dropped connection picks up where it was |
+| `core/limits.py`, `core/db.py` | Limits per browser and per IP; Postgres for cache, limits and logs |
 | `apps/frontend/` | React app: the live page preview is the editor |
 
 ## Configuration
@@ -106,6 +113,12 @@ The suite runs offline (`AI_MODE=local`) and needs a JDK for the Java and API te
 `python scripts/smoke_test.py <url>` checks a running server end to end: every
 runtime, Word and PDF. CI runs both, builds the production image and smoke-tests
 it on every push.
+
+## Before going public
+
+See [docs/security.md](docs/security.md) and [docs/deployment.md](docs/deployment.md):
+run programs on a separate worker (`EXEC_BACKEND=remote`), set `LABFORGE_DATABASE_URL`,
+use your own domain with `LABFORGE_PUBLIC_URL`, and build with `VITE_CONTACT_EMAIL`.
 
 ## Use it honestly
 
