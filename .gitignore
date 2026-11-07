@@ -65,3 +65,10 @@ HANDOFF_TO_CHATGPT.txt
 config/student_profile.json
 config/users.json
 config/usage.json
+
+# Promo videos (large; keep out of the repo)
+brag-output*/
+promo-output*/
+
+# Frontend prerender build
+apps/frontend/dist-ssr/

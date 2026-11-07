@@ -46,6 +46,11 @@ services:
         sync: false
       - key: SENTRY_DSN
         sync: false
+      # Your LinkedIn/GitHub/portfolio URLs, comma-separated (docs/seo.md).
+      - key: LABFORGE_AUTHOR_LINKS
+        sync: false
+      - key: VITE_AUTHOR_LINKS
+        sync: false
       # The free instance has 512 MB and a tenth of a CPU: one heavy process at a time,
       # five times the usual timeouts.
       - key: LABFORGE_MAX_PARALLEL_RUNS

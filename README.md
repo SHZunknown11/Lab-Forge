@@ -1,5 +1,7 @@
 # LabForge
 
+**A free AI lab report generator, created by [Mohammad Taha](https://github.com/SHZunknown11), a student at Chandigarh University.**
+
 Upload an experiment sheet, fill in your name, UID and subject, and download a
 finished lab report as Word or PDF: aim, objectives, working code, real output
 screenshots and learning outcomes, laid out the way your college wants it.
@@ -114,11 +116,17 @@ The suite runs offline (`AI_MODE=local`) and needs a JDK for the Java and API te
 runtime, Word and PDF. CI runs both, builds the production image and smoke-tests
 it on every push.
 
+## Author
+
+LabForge is designed and built by **Mohammad Taha** (Chandigarh University). It is an
+independent project and isn't affiliated with or endorsed by any university.
+
 ## Before going public
 
 See [docs/security.md](docs/security.md) and [docs/deployment.md](docs/deployment.md):
 run programs on a separate worker (`EXEC_BACKEND=remote`), set `LABFORGE_DATABASE_URL`,
 use your own domain with `LABFORGE_PUBLIC_URL`, and build with `VITE_CONTACT_EMAIL`.
+For search engines and AI assistants, see [docs/seo.md](docs/seo.md).
 
 ## Use it honestly
 

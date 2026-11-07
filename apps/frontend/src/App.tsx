@@ -3,7 +3,8 @@ import {
   ApiError, cancelJob, createDraft, deleteJob, fileUrl, getMeta, renderReport, resumeDraft, runTask, uploadImage,
 } from "./api"
 import { AdSlot } from "./components/AdSlot"
-import { InfoPage } from "./components/InfoPage"
+import { HomeIntro, InfoPage } from "./components/InfoPage"
+import { AUTHOR, AUTHOR_PATH } from "./content"
 import { Paper, type Progress } from "./components/Paper"
 import { Feedback } from "./components/Feedback"
 import { Review } from "./components/Review"
@@ -767,7 +768,9 @@ export default function App() {
           <a href="/about">How it works</a>
           <a href="/privacy">Privacy</a>
           <a href="/terms">Terms</a>
-          <p className="railfoot__note">Independent project, not affiliated with any university.</p>
+          <p className="railfoot__note">
+            Made by <a href={AUTHOR_PATH}>{AUTHOR.name}</a>. Independent project, not affiliated with any university.
+          </p>
         </footer>
       </aside>
 
@@ -775,6 +778,7 @@ export default function App() {
         {route ? (
           <InfoPage route={route} meta={meta} />
         ) : (
+          <>
           <Paper
             template={tpl}
             fields={ordered}
@@ -792,6 +796,8 @@ export default function App() {
               setView("edit")
             }}
           />
+            {!job && !writing && <HomeIntro />}
+          </>
         )}
         <AdSlot placement="bench" />
       </main>

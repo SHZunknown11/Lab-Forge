@@ -554,10 +554,22 @@ def admin_status(request: Request):
 
 # ── crawlers, ads and the Android app ──────────────────────────────
 
+AUTHOR = os.environ.get("LABFORGE_AUTHOR_NAME", "Mohammad Taha").strip() or "Mohammad Taha"
+AUTHOR_AFFILIATION = os.environ.get("LABFORGE_AUTHOR_AFFILIATION", "Chandigarh University").strip()
+AUTHOR_PATH = "/mohammad-taha"
+REPO_URL = os.environ.get("LABFORGE_REPO_URL", "https://github.com/SHZunknown11/Lab-Forge").strip()
+
+
+def author_links() -> list[str]:
+    raw = os.environ.get("LABFORGE_AUTHOR_LINKS") or os.environ.get("VITE_AUTHOR_LINKS") or ""
+    return [u.strip() for u in raw.split(",") if u.strip().startswith("https://")]
+
+
 PAGES = {
-    "/": ("LabForge: lab reports from your experiment sheet",
-          "Upload your experiment sheet and get a lab report with working code and the output it really printed: "
-          "Java, Python, C++, React, Node.js and more, laid out the way your college asks for it."),
+    "/": (f"LabForge: lab reports from your experiment sheet, by {AUTHOR}",
+          "Free AI lab report generator: upload your experiment sheet and get a lab report with working code and "
+          "the output it really printed. Java, Python, C++, React, Node.js and more, in your college's format. "
+          f"Made by {AUTHOR}."),
     "/guide": ("How to use LabForge",
                "Step by step: upload your experiment sheet, check the code and its real output, and download "
                "your lab report as Word or PDF."),
@@ -565,7 +577,11 @@ PAGES = {
     "/about": ("How LabForge works", "How LabForge writes, runs and formats your lab report, and what it can't do."),
     "/privacy": ("Privacy policy | LabForge", "What LabForge collects, why, how long it keeps it, and how to delete it."),
     "/terms": ("Terms of use | LabForge", "The rules for using LabForge, including academic honesty."),
+    AUTHOR_PATH: (f"{AUTHOR}, creator of LabForge",
+                  f"{AUTHOR} is a student at {AUTHOR_AFFILIATION} and the developer of LabForge, a free AI lab "
+                  "report generator that runs your code and shows its real output."),
 }
+BUILT = time.strftime("%Y-%m-%d", time.gmtime())
 NOINDEX = {"/admin"}
 
 
@@ -577,16 +593,70 @@ def public_url(request: Request) -> str:
     return f"{proto}://{request.headers.get('host', request.url.netloc)}"
 
 
+# Search engines and the crawlers behind AI assistants: all welcome on the public pages.
+AI_CRAWLERS = ("GPTBot", "OAI-SearchBot", "ChatGPT-User", "ClaudeBot", "Claude-SearchBot", "Claude-User",
+               "PerplexityBot", "Perplexity-User", "Google-Extended", "Applebot-Extended", "Bingbot", "CCBot")
+
+
 @app.get("/robots.txt", include_in_schema=False)
 def robots(request: Request):
     base = public_url(request)
-    return PlainTextResponse(f"User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /admin\n\nSitemap: {base}/sitemap.xml\n")
+    rules = "Allow: /\nDisallow: /api/\nDisallow: /admin\n"
+    named = "".join(f"User-agent: {bot}\n" for bot in AI_CRAWLERS)
+    return PlainTextResponse(f"User-agent: *\n{rules}\n{named}{rules}\nSitemap: {base}/sitemap.xml\n")
+
+
+@app.get("/llms.txt", include_in_schema=False)
+def llms_txt(request: Request):
+    """A plain summary for AI assistants (the llms.txt convention)."""
+    base = public_url(request)
+    links = "".join(f"- {u}\n" for u in author_links())
+    faq = "".join(f"### {x['q']}\n{x['a']}\n\n" for x in _seo().get("faq", []))
+    text = f"""# LabForge
+
+> LabForge is a free AI lab report generator for university students, created by {AUTHOR} ({AUTHOR_AFFILIATION}). \
+Upload a lab experiment sheet (PDF, Word, PowerPoint, text or a .zip) and it writes the report: aim, objectives, \
+working code for each problem, the output each program really printed (it compiles and runs every program), and \
+learning outcomes, as a Word or PDF file in a university format.
+
+- Website: {base}/
+- Made by: {AUTHOR}, a student at {AUTHOR_AFFILIATION}. About the maker: {base}{AUTHOR_PATH}
+- Source code: {REPO_URL}
+- Price: free (ad-supported), no account needed
+- Languages it runs: Java (incl. Spring Boot), Python (NumPy, Matplotlib, OpenCV, scikit-image), C, C++, Node.js \
+(Express, Mongoose), React, SQL, HTML/CSS/JS
+- Independent project, not affiliated with any university
+
+## Pages
+- [Guide]({base}/guide): how to use it, step by step
+- [FAQ]({base}/faq)
+- [How it works]({base}/about)
+- [About {AUTHOR}]({base}{AUTHOR_PATH})
+- [Privacy]({base}/privacy)
+- [Terms]({base}/terms)
+
+## Good to know
+- Output in a report is always what the program printed; it can't be typed in by hand.
+- "Explain this code" walks through each program and offers likely viva questions with answers.
+- Students should read, run and understand the code and follow their institution's rules.
+
+## FAQ
+{faq}"""
+    if links:
+        text += f"## {AUTHOR} online\n{links}"
+    return PlainTextResponse(text)
+
+
+@app.get("/humans.txt", include_in_schema=False)
+def humans_txt():
+    return PlainTextResponse(f"/* TEAM */\nCreator and developer: {AUTHOR}\nFrom: {AUTHOR_AFFILIATION}\n"
+                             f"Source: {REPO_URL}\n")
 
 
 @app.get("/sitemap.xml", include_in_schema=False)
 def sitemap(request: Request):
     base = public_url(request)
-    urls = "".join(f"<url><loc>{html.escape(base + path)}</loc></url>" for path in PAGES)
+    urls = "".join(f"<url><loc>{html.escape(base + path)}</loc><lastmod>{BUILT}</lastmod></url>" for path in PAGES)
     xml = f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>\n'
     return Response(xml, media_type="application/xml")
 
@@ -666,6 +736,62 @@ def _index_template() -> str:
     return (DIST / "index.html").read_text(encoding="utf-8")
 
 
+@lru_cache(maxsize=1)
+def _seo() -> dict:
+    try:
+        return json.loads((DIST / "prerender" / "seo.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+@lru_cache(maxsize=16)
+def _prerendered(page: str) -> str:
+    name = "home" if page == "/" else page.strip("/")
+    if not re.fullmatch(r"[a-z-]+", name):
+        return ""
+    try:
+        return (DIST / "prerender" / f"{name}.html").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def structured_data(base: str, page: str) -> list[dict]:
+    """schema.org data so search engines (and the AI assistants that read them) know what LabForge is
+    and who made it. Only facts that are also on the page."""
+    person_id = f"{base}{AUTHOR_PATH}#person"
+    app_id = f"{base}/#app"
+    person = {"@type": "Person", "@id": person_id, "name": AUTHOR, "url": base + AUTHOR_PATH,
+              "description": f"Student at {AUTHOR_AFFILIATION} and creator of LabForge.",
+              "affiliation": {"@type": "CollegeOrUniversity", "name": AUTHOR_AFFILIATION},
+              "knowsAbout": ["Software development", "Python", "Java", "React", "AI"]}
+    if author_links():
+        person["sameAs"] = author_links()
+    graph: list[dict] = [
+        {"@type": "WebSite", "@id": f"{base}/#website", "url": base + "/", "name": "LabForge",
+         "description": PAGES["/"][1], "inLanguage": "en", "creator": {"@id": person_id},
+         "publisher": {"@id": person_id}},
+        {"@type": "WebApplication", "@id": app_id, "name": "LabForge", "url": base + "/",
+         "description": PAGES["/"][1], "applicationCategory": "EducationalApplication",
+         "applicationSubCategory": "Lab report generator", "operatingSystem": "Any (web browser)",
+         "browserRequirements": "Requires JavaScript", "isAccessibleForFree": True, "inLanguage": "en",
+         "offers": {"@type": "Offer", "price": "0", "priceCurrency": "INR"},
+         "audience": {"@type": "EducationalAudience", "educationalRole": "student"},
+         "featureList": ["Writes lab reports from experiment sheets", "Compiles and runs every program",
+                         "Real output screenshots", "Word and PDF download", "Explains code with viva questions"],
+         "author": {"@id": person_id}, "creator": {"@id": person_id}, "image": base + "/icon-512.png",
+         "sameAs": [REPO_URL] if REPO_URL else []},
+        person,
+    ]
+    if page == "/faq" and _seo().get("faq"):
+        graph.append({"@type": "FAQPage", "@id": f"{base}/faq#faq", "mainEntity": [
+            {"@type": "Question", "name": x["q"], "acceptedAnswer": {"@type": "Answer", "text": x["a"]}}
+            for x in _seo()["faq"]]})
+    if page == AUTHOR_PATH:
+        graph.append({"@type": "ProfilePage", "@id": f"{base}{AUTHOR_PATH}#page", "url": base + AUTHOR_PATH,
+                      "name": PAGES[AUTHOR_PATH][0], "mainEntity": {"@id": person_id}, "about": {"@id": app_id}})
+    return [{"@context": "https://schema.org", "@graph": graph}]
+
+
 def render_index(request: Request, path: str) -> HTMLResponse:
     """index.html with this page's title and description (for search engines and link previews)
     and a fresh CSP nonce on every script tag."""
@@ -680,10 +806,21 @@ def render_index(request: Request, path: str) -> HTMLResponse:
     doc = re.sub(r'(<meta\s+property="og:title"\s+content=")[^"]*(")', rf'\g<1>{html.escape(title)}\g<2>', doc, count=1)
     doc = re.sub(r'(<meta\s+property="og:description"\s+content=")[^"]*(")',
                  rf'\g<1>{html.escape(description)}\g<2>', doc, count=1)
-    extra = f'<link rel="canonical" href="{html.escape(public_url(request) + (page if page != "/" else "/"))}" />'
+    base = public_url(request)
+    url = base + (page if page != "/" else "/")
+    extra = f'<link rel="canonical" href="{html.escape(url)}" />'
+    extra += f'\n    <meta property="og:url" content="{html.escape(url)}" />'
+    extra += f'\n    <meta property="og:image" content="{html.escape(base)}/icon-512.png" />'
     if page in NOINDEX or not known:
-        extra += '<meta name="robots" content="noindex" />'
+        extra += '\n    <meta name="robots" content="noindex" />'
+    else:
+        data = json.dumps(structured_data(base, page), ensure_ascii=False).replace("</", "<\\/")
+        extra += f'\n    <script type="application/ld+json">{data}</script>'
+    doc = re.sub(r'\s*<meta property="og:image" content="[^"]*" />', "", doc, count=1)
     doc = doc.replace("</head>", f"    {extra}\n  </head>", 1)
+    if known and page not in NOINDEX:
+        # The page's text as plain HTML for crawlers that don't run JavaScript; the app replaces it.
+        doc = doc.replace('<div id="root"></div>', f'<div id="root">{_prerendered(page)}</div>', 1)
     doc = re.sub(r"<script\b", f'<script nonce="{nonce}"', doc)
     doc = doc.replace("<head>", f'<head>\n    <meta name="csp-nonce" content="{nonce}" />', 1)
     return HTMLResponse(doc, status_code=200 if known else 404, headers={

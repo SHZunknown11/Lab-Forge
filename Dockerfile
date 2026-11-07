@@ -17,6 +17,8 @@ ARG VITE_CONTACT_EMAIL=""
 # Optional: browser error reports (Sentry) and cookieless page counts (Cloudflare Web Analytics).
 ARG VITE_SENTRY_DSN=""
 ARG VITE_CF_BEACON_TOKEN=""
+# Your LinkedIn/GitHub/portfolio URLs, comma-separated, listed on the /mohammad-taha page.
+ARG VITE_AUTHOR_LINKS=""
 RUN npm run build
 
 # ── app ──────────────────────────────────────────────────────────

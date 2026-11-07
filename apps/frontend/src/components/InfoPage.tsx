@@ -1,3 +1,4 @@
+import { AUTHOR, AUTHOR_PATH, TAGLINE, faqFor } from "../content"
 import type { Route } from "../routes"
 import type { Meta } from "../types"
 
@@ -23,12 +24,14 @@ export function InfoPage({ route, meta }: { route: Exclude<Route, "">; meta: Met
       {route === "about" && <About />}
       {route === "privacy" && <Privacy meta={meta} />}
       {route === "terms" && <Terms />}
+      {route === "mohammad-taha" && <Maker />}
       <nav className="info__more" aria-label="More pages">
         <a href="/guide">Guide</a>
         <a href="/faq">FAQ</a>
         <a href="/about">How it works</a>
         <a href="/privacy">Privacy</a>
         <a href="/terms">Terms</a>
+        <a href={AUTHOR_PATH}>About the maker</a>
       </nav>
     </article>
   )
@@ -82,48 +85,85 @@ function Guide() {
 }
 
 function Faq({ meta }: { meta: Meta | null }) {
-  const daily = meta?.limits.daily ?? 10
   return (
     <>
       <h1>Frequently asked questions</h1>
-      <h2>Which languages can it run?</h2>
+      {faqFor(meta?.limits.daily ?? 10).map((x) => (
+        <section key={x.q}>
+          <h2>{x.q}</h2>
+          <p>{x.a}</p>
+        </section>
+      ))}
       <p>
-        Java (including Spring Boot), Python with NumPy, Matplotlib, OpenCV and scikit-image, C, C++, Node.js with
-        Express and Mongoose, React, SQL (on SQLite), and HTML/CSS/JS pages. Other languages get the code and a space for
-        your own screenshot.
+        Still stuck? Write to <Contact />.
       </p>
-      <h2>Is the output real?</h2>
-      <p>
-        Yes. Every program is compiled and run, and the report shows exactly what it printed. You can't edit the output
-        by hand; if you change the code or the input, run it again and the new output replaces the old one.
-      </p>
-      <h2>Why is it limited to {daily} new sheets a day?</h2>
-      <p>
-        Writing a new sheet costs an AI call. A sheet someone has already uploaded is reused for free, so it doesn't
-        count. The limit keeps LabForge free for everyone.
-      </p>
-      <h2>Does my report match my classmates'?</h2>
-      <p>
-        If you upload the same sheet, you start from the same code. That's fine for learning, but your college's rules
-        decide what you may submit. Read the code, understand it, and change it to make it your own where your
-        teacher expects that.
-      </p>
-      <h2>Is this cheating?</h2>
-      <p>
-        It depends on how you use it. LabForge is meant to save you formatting and screenshot work and to help you
-        understand the programs. Submitting work you can't explain, or that your institution doesn't allow, is your
-        responsibility. Use "Explain this code" and make sure you can answer viva questions about it.
-      </p>
-      <h2>Do I need an account?</h2>
-      <p>No. Your details are saved in your browser only.</p>
-      <h2>How do I delete my data?</h2>
-      <p>
-        Use "Delete this report from the server" in the download step. To clear what's saved in your browser, clear
-        this site's data in your browser settings. For anything else, write to <Contact />.
-      </p>
-      <h2>Is LabForge made by my university?</h2>
-      <p>No. LabForge is an independent project and isn't affiliated with or endorsed by any university.</p>
     </>
+  )
+}
+
+function Maker() {
+  return (
+    <>
+      <h1>{AUTHOR.name}, creator of LabForge</h1>
+      <p>
+        <b>{AUTHOR.name}</b> is a student at {AUTHOR.affiliation} and the developer of LabForge, a
+        free web app that turns lab experiment sheets into finished lab reports with working code and the output it
+        really printed.
+      </p>
+      <h2>Why LabForge exists</h2>
+      <p>
+        Every practical subject asks for the same lab file: aim, objectives, code, an output screenshot and learning
+        outcomes. Students spend hours formatting these by hand. {AUTHOR.name} built LabForge so that time goes into
+        understanding the programs instead: it writes the code, actually runs it, captures the real output, and lays
+        the report out the way the college asks for it.
+      </p>
+      <h2>What went into it</h2>
+      <ul>
+        <li>A Python (FastAPI) backend that compiles and runs Java, Python, C, C++, Node.js, React, SQL and web pages in isolation.</li>
+        <li>AI models from several providers with automatic failover, and a cache so a whole class uploading the same sheet costs one call.</li>
+        <li>A React frontend where the live page preview is the editor, and Word and PDF output that follows a university layout.</li>
+        <li>Safeguards so a report can only show output a program really printed.</li>
+      </ul>
+      {AUTHOR.links.length > 0 && (
+        <>
+          <h2>Find {AUTHOR.name} online</h2>
+          <ul>
+            {AUTHOR.links.map((url) => (
+              <li key={url}>
+                <a href={url} rel="me noopener" target="_blank">{url.replace(/^https:\/\/(www\.)?/, "")}</a>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <p className="hint">
+        LabForge is an independent project. It isn't affiliated with, sponsored or endorsed by {AUTHOR.affiliation}.
+      </p>
+    </>
+  )
+}
+
+/** The short description under the page preview on the home page: visible to everyone, and to search engines. */
+export function HomeIntro() {
+  return (
+    <section className="intro" aria-labelledby="intro-title">
+      <h1 id="intro-title">LabForge: {TAGLINE.toLowerCase()}</h1>
+      <p>
+        Upload the experiment sheet from your LMS and LabForge writes the lab report for you: the aim, objectives,
+        working code for every Easy, Medium and Hard problem, the output each program really printed, and learning
+        outcomes. Download it as a Word file or PDF, laid out the way your college asks for it. Free, no account needed.
+      </p>
+      <ul className="intro__points">
+        <li><b>Real output.</b> Every program is compiled and run; Matplotlib plots and web pages are captured as images.</li>
+        <li><b>Any practical subject.</b> Java, Python, C, C++, Node.js, React, SQL, HTML/CSS/JS.</li>
+        <li><b>Understand it.</b> "Explain this code" walks through each program and lets you practise viva questions.</li>
+        <li><b>Your format.</b> A university CSE layout or a plain one, with your name, UID and subject filled in.</li>
+      </ul>
+      <p className="intro__by">
+        Made by <a href={AUTHOR_PATH}>{AUTHOR.name}</a>, a student at {AUTHOR.affiliation}.{" "}
+        <a href="/guide">How to use it</a> · <a href="/faq">FAQ</a>
+      </p>
+    </section>
   )
 }
 
@@ -163,6 +203,11 @@ function About() {
         LabForge saves you the formatting and the screenshots, and helps you understand the code. Read the code before
         you submit it, run it yourself, and make sure you can explain it in your viva. Follow your institution's rules on
         what you may submit.
+      </p>
+      <h2>Who made it</h2>
+      <p>
+        LabForge was designed and built by <a href={AUTHOR_PATH}>{AUTHOR.name}</a>, a student at{" "}
+        {AUTHOR.affiliation}.
       </p>
       <h2>Independent</h2>
       <p>

@@ -331,3 +331,47 @@ def test_postgres_activity_log_and_delete():
     assert any(r["job"] == job for r in log.rows(days=1))
     log.delete_job(job)
     assert not any(r["job"] == job for r in log.rows(days=1))
+
+
+# ── search engines and AI assistants ───────────────────────────────
+
+def test_pages_carry_structured_data_and_prerendered_text(monkeypatch, tmp_path):
+    from starlette.requests import Request
+
+    from apps.api import main
+
+    page = ('<!doctype html><html><head><title>x</title><meta name="description" content="d" />'
+            '<meta property="og:title" content="t" /><meta property="og:description" content="o" />'
+            '<meta property="og:image" content="/icon-512.png" /></head>'
+            '<body><div id="root"></div><script type="module" src="/assets/a.js"></script></body></html>')
+    (tmp_path / "prerender").mkdir()
+    (tmp_path / "prerender" / "faq.html").write_text("<h1>Frequently asked questions</h1>")
+    (tmp_path / "prerender" / "seo.json").write_text(json.dumps({"faq": [{"q": "Who made LabForge?",
+                                                                           "a": "Mohammad Taha."}]}))
+    monkeypatch.setattr(main, "DIST", tmp_path)
+    monkeypatch.setattr(main, "_index_template", lambda: page)
+    main._seo.cache_clear()
+    main._prerendered.cache_clear()
+    scope = {"type": "http", "headers": [(b"host", b"labforge.example")], "path": "/faq", "scheme": "https",
+             "server": ("labforge.example", 443), "query_string": b"", "method": "GET"}
+    body = main.render_index(Request(scope), "/faq").body.decode()
+    assert '<div id="root"><h1>Frequently asked questions</h1></div>' in body
+    data = json.loads(body.split('type="application/ld+json">')[1].split("</script>")[0])
+    graph = {item["@type"]: item for item in data[0]["@graph"]}
+    assert graph["Person"]["name"] == "Mohammad Taha"
+    assert graph["Person"]["affiliation"]["name"] == "Chandigarh University"
+    assert graph["WebApplication"]["creator"]["@id"] == graph["Person"]["@id"]
+    assert graph["FAQPage"]["mainEntity"][0]["name"] == "Who made LabForge?"
+    assert "aggregateRating" not in graph["WebApplication"]  # no invented ratings
+    main._seo.cache_clear()
+    main._prerendered.cache_clear()
+
+
+def test_llms_txt_robots_and_sitemap_name_the_maker(client, monkeypatch):
+    monkeypatch.setenv("LABFORGE_PUBLIC_URL", "https://labforge.example")
+    llms = client.get("/llms.txt").text
+    assert llms.startswith("# LabForge") and "Mohammad Taha" in llms and "https://labforge.example/mohammad-taha" in llms
+    robots = client.get("/robots.txt").text
+    assert "User-agent: GPTBot" in robots and "User-agent: ClaudeBot" in robots and "Disallow: /api/" in robots
+    assert "https://labforge.example/mohammad-taha" in client.get("/sitemap.xml").text
+    assert "Mohammad Taha" in client.get("/humans.txt").text
