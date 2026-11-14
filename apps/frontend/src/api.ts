@@ -1,4 +1,4 @@
-import type { Draft, DraftEvent, Explanation, Meta, RenderResult, Task } from "./types"
+import type { Draft, DraftEvent, Explanation, Me, Meta, RenderResult, Task } from "./types"
 
 export class ApiError extends Error {
   status: number
@@ -203,3 +203,27 @@ export const reportContent = (job: string, body: { reason: ReportReason; comment
 
 export const fileUrl = (job: string, name: string, render?: string) =>
   render ? `/api/jobs/${job}/files/${render}/${encodeURIComponent(name)}` : `/api/jobs/${job}/files/${encodeURIComponent(name)}`
+
+// ── account ────────────────────────────────────────────────────────
+
+const post = (url: string, body?: unknown) =>
+  call(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+
+export const getMe = () => json<Me>(call("/api/me"))
+
+export const requestCode = (email: string) => json<{ ok: boolean; minutes: number }>(post("/api/auth/code", { email }))
+
+export const verifyCode = (email: string, code: string) => json<Me>(post("/api/auth/verify", { email, code }))
+
+export const signOut = () => json<{ ok: boolean }>(post("/api/auth/logout"))
+
+/** A finished file as bytes, to keep on this device. */
+export async function fetchFile(job: string, name: string, render: string): Promise<Blob> {
+  const res = await call(fileUrl(job, name, render))
+  if (!res.ok) await fail(res)
+  return res.blob()
+}

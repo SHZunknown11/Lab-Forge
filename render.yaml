@@ -30,6 +30,21 @@ services:
         sync: false
       - key: LABFORGE_PUBLIC_URL
         sync: false
+      # Accounts: sign-in codes by email (docs/deployment.md). Render's free plan blocks SMTP
+      # ports, so use Resend here. Until a mail key is set, turn sign-in off with
+      # LABFORGE_REQUIRE_LOGIN=0, or nobody can write a report.
+      - key: LABFORGE_REQUIRE_LOGIN
+        value: "1"
+      - key: LABFORGE_EMAIL_DOMAINS
+        value: cuchd.in
+      - key: LABFORGE_FREE_REPORTS
+        value: "3"
+      - key: LABFORGE_SECRET
+        generateValue: true
+      - key: RESEND_API_KEY
+        sync: false
+      - key: LABFORGE_MAIL_FROM
+        sync: false
       # Programs run on a separate worker machine (apps/worker), not on this server.
       # Until a worker exists, leave EXEC_BACKEND unset (local) and see docs/security.md.
       - key: EXEC_BACKEND

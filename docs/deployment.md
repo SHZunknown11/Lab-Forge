@@ -49,6 +49,31 @@ compose file sets `LABFORGE_TRUST_PROXY=1`, so per-visitor limits use the
 Data lives in the `labforge-data` volume: job folders (deleted after
 `LABFORGE_JOB_TTL_HOURS`), the draft cache and `usage.jsonl`.
 
+## Accounts and sign-in
+
+Students sign in with a 6-digit code sent to their college email
+(`core/accounts.py`). Three things must be set before turning it on:
+
+1. **A database.** `LABFORGE_DATABASE_URL` (Neon). Without it accounts go to
+   `artifacts/accounts.sqlite3`, which is lost whenever the host wipes its disk.
+2. **A way to send email.** `RESEND_API_KEY` plus `LABFORGE_MAIL_FROM` on a
+   domain you've verified with Resend, or `SMTP_HOST`/`SMTP_USER`/
+   `SMTP_PASSWORD` (Gmail with an app password sends about 500 a day). Render's
+   free plan blocks outgoing SMTP, so use Resend there. `/admin` status shows
+   which backend is active. Send yourself a code first: college mail servers
+   sometimes put mail from new senders in spam.
+3. **`LABFORGE_SECRET`**, a long random value that never changes. It keys the
+   sign-in codes and the key that locks each student's reports on their device.
+
+`LABFORGE_EMAIL_DOMAINS` (default `cuchd.in`) says who may sign in,
+`LABFORGE_FREE_REPORTS` and `LABFORGE_FREE_PERIOD` how many reports are free.
+`LABFORGE_REQUIRE_LOGIN=0` turns sign-in off again.
+
+In `/admin`: **Accounts** lists who signed in, lets you give extra reports or
+block an account; **Failed sessions** shows every session where a program
+failed or couldn't be run, with the sheet, the code and the error, kept for
+`LABFORGE_FLAG_DAYS` days.
+
 ## Running student code safely
 
 Uploaded sheets decide what code the model writes, so treat every program as

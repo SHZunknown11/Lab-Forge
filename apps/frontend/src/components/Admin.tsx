@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { Flags, Users } from "./AdminAccounts"
 
 /** Private activity panel at /admin: who made which report and whether its programs ran. */
 
@@ -65,6 +66,7 @@ export default function Admin() {
   const [issuesOnly, setIssuesOnly] = useState(false)
   const [vote, setVote] = useState<"" | "up" | "down" | "any">("")
   const [open, setOpen] = useState<string | null>(null)
+  const [tab, setTab] = useState<"activity" | "flags" | "users">("activity")
 
   const load = useCallback(async () => {
     if (!token) return
@@ -153,6 +155,13 @@ export default function Admin() {
     <main className="admin">
       <header className="admin__head">
         <h1>Activity</h1>
+        <div className="admin__tabs" role="tablist" aria-label="View">
+          {([["activity", "All reports"], ["flags", "Failed sessions"], ["users", "Accounts"]] as const).map(([id, label]) => (
+            <button key={id} role="tab" className="btn btn--quiet" aria-selected={tab === id} onClick={() => setTab(id)}>
+              {label}
+            </button>
+          ))}
+        </div>
         <span className="admin__storage" title="Where the log is kept">
           {storage === "postgres" ? "Database" : storage === "file" ? "Server file (wiped on redeploy)" : ""}
         </span>
@@ -161,6 +170,10 @@ export default function Admin() {
         </button>
       </header>
 
+      {tab === "flags" && <Flags token={token} />}
+      {tab === "users" && <Users token={token} />}
+      {tab === "activity" && (
+      <>
       <div className="admin__bar">
         <input
           type="search"
@@ -282,6 +295,8 @@ export default function Admin() {
         })}
       </ul>
       {reports && shown.length === 0 && <p className="hint admin__empty">Nothing here yet.</p>}
+      </>
+      )}
     </main>
   )
 }

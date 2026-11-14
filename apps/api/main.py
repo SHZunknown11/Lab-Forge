@@ -1,9 +1,10 @@
 """LabForge HTTP API and static frontend.
 
-No accounts: student details live in the browser. Spend is protected by limits per browser
-(an anonymous id the page keeps) and per IP address, on AI calls (cache hits are free), runs,
-renders and uploads. Limits and the draft cache live in Postgres when LABFORGE_DATABASE_URL
-is set, so they survive restarts.
+Students sign in with a code sent to their college email (core/accounts.py) and get a few
+free reports per day; LABFORGE_REQUIRE_LOGIN=0 turns sign-in off. Their name, UID and finished
+reports stay in the browser. Spend is also protected by limits per browser (an anonymous id
+the page keeps) and per IP address, on AI calls (cache hits are free), runs, renders and
+uploads. Accounts, limits and the draft cache live in Postgres when LABFORGE_DATABASE_URL is set.
 """
 from __future__ import annotations
 
@@ -67,7 +68,12 @@ from fastapi.responses import (  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
-from core.activity import ActivityLog, task_summary  # noqa: E402
+from core import mailer  # noqa: E402
+from core.accounts import (  # noqa: E402
+    CODE_MINUTES, SESSION_DAYS, AccountError, Accounts, NoCredits, allowed_domains, flag_reason, free_period,
+    free_reports,
+)
+from core.activity import ActivityLog, hash_ip, task_summary  # noqa: E402
 from core.ai.provider import AIError, DraftCache, ExplainCache, get_provider, usage_summary  # noqa: E402
 from core.documents.pdf_converter import PdfConverter  # noqa: E402
 from core.documents.templates import DEFAULT_FIELDS, TEMPLATES  # noqa: E402
@@ -94,6 +100,7 @@ CLIENT_IP_HEADER = os.environ.get("LABFORGE_CLIENT_IP_HEADER", "").strip().lower
 DIST = ROOT / "apps" / "frontend" / "dist"
 STREAM_PING_SECONDS = 10
 CLIENT_ID = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
+SESSION_COOKIE = "lf_session"
 
 
 @asynccontextmanager
@@ -113,6 +120,7 @@ runner = CodeRunner()
 activity = ActivityLog()
 limiter = make_limiter()
 jobs = DraftJobs()
+accounts = Accounts()
 
 
 # ── who is asking, and how much they may ask ───────────────────────
@@ -172,6 +180,111 @@ def remaining(request: Request, bucket: str) -> int:
     return limiter.remaining(f"ip:{client_ip(request)}", bucket, per_client, window)
 
 
+# ── accounts ───────────────────────────────────────────────────────
+
+def login_required() -> bool:
+    return os.environ.get("LABFORGE_REQUIRE_LOGIN", "1").strip() != "0"
+
+
+def current_user(request: Request) -> dict | None:
+    token = request.cookies.get(SESSION_COOKIE, "")
+    if not token:
+        return None
+    try:
+        return accounts.user_for(token)
+    except Exception as exc:  # noqa: BLE001 - a database blip reads as "signed out", not a crash
+        print(f"[accounts] {type(exc).__name__}: {exc}")
+        return None
+
+
+def need_user(request: Request) -> dict | None:
+    """The signed-in student. 401 when sign-in is required and there is none; the owner's own
+    checks (deploy smoke test) pass without one."""
+    user = current_user(request)
+    if user and user["blocked"]:
+        raise HTTPException(403, "This account has been blocked. Contact us if that's a mistake.")
+    if user is None and login_required() and not _is_owner(request):
+        raise HTTPException(401, "Sign in with your college email to write a report.")
+    return user
+
+
+def _no_credits_message() -> str:
+    when = "tomorrow" if free_period() == "day" else "next month"
+    return f"You've used your {free_reports()} free reports. More {when}."
+
+
+def _me(user: dict | None) -> dict:
+    if user is None:
+        return {"user": None}
+    return {"user": {"email": user["email"]}, "credits": accounts.credits(user["id"]),
+            "history_key": accounts.history_key(user["id"])}
+
+
+def _is_https(request: Request) -> bool:
+    return request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip() == "https"
+
+
+class CodeRequest(BaseModel):
+    email: str = Field(max_length=254)
+
+
+class VerifyRequest(BaseModel):
+    email: str = Field(max_length=254)
+    code: str = Field(max_length=12)
+
+
+@app.post("/api/auth/code")
+def auth_code(body: CodeRequest, request: Request):
+    """Email a 6-digit sign-in code."""
+    try:
+        email = accounts.check_email(body.email)
+    except AccountError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    if not mailer.ready():
+        raise HTTPException(503, "Sign-in emails aren't set up on this server yet.")
+    guard(request, "codes")
+    try:
+        limiter.hit(f"mail:{email}", "codes", limits()["codes"][0], 3600)  # nobody's inbox gets flooded
+        code = accounts.start_code(email)
+    except RateLimited as exc:
+        raise HTTPException(429, _limit_message(exc.bucket, exc.wait)) from exc
+    except AccountError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    try:
+        mailer.send_code(email, code, CODE_MINUTES)
+    except mailer.MailError as exc:
+        accounts.drop_code(email)
+        raise HTTPException(502, "We couldn't send the email. Try again in a minute.") from exc
+    return {"ok": True, "minutes": CODE_MINUTES}
+
+
+@app.post("/api/auth/verify")
+def auth_verify(body: VerifyRequest, request: Request):
+    guard(request, "verify")
+    try:
+        email = accounts.check_email(body.email)
+        user, token = accounts.verify_code(email, body.code, hash_ip(client_ip(request)))
+    except AccountError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    response = JSONResponse(_me(user), headers={"Cache-Control": "no-store"})
+    response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_DAYS * 86400, httponly=True, samesite="lax",
+                        secure=_is_https(request), path="/")
+    return response
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request):
+    accounts.logout(request.cookies.get(SESSION_COOKIE, ""))
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return response
+
+
+@app.get("/api/me")
+def me(request: Request):
+    return JSONResponse(_me(current_user(request)), headers={"Cache-Control": "no-store"})
+
+
 _last_purge = [time.time()]
 
 
@@ -205,6 +318,8 @@ def meta(request: Request):
         "pdf": PdfConverter().available(),
         "ai_ready": provider.configured,
         "limits": {"daily": daily, "remaining": remaining(request, "ai")},
+        "auth": {"required": login_required(), "domains": allowed_domains(), "free": free_reports(),
+                 "period": free_period(), "flag_days": accounts.flag_days()},
         "job_ttl_hours": JOB_TTL_HOURS,
         "log_days": activity.keep_days,
         "log_personal": os.environ.get("LABFORGE_LOG_PERSONAL", "0") == "1",
@@ -233,6 +348,7 @@ async def create_draft(
     _maybe_purge()
     ip = client_ip(request)
     owner = _is_owner(request)
+    user = need_user(request)
     guard(request, "drafts")
     raw = ""
     previous = job_path(from_job) if from_job else None
@@ -261,14 +377,26 @@ async def create_draft(
     subject = subject.strip()[:120]
     cache = DraftCache()
     hit = not fresh and cache.get(DraftCache.key(sheet, language)) is not None
+    # Writing the same sheet again (from_job) is part of the report already paid for.
+    pays = user is not None and login_required() and not owner and previous is None
+    if pays and accounts.credits(user["id"])["left"] <= 0:
+        raise HTTPException(402, _no_credits_message())
     if not hit:
         guard(request, "ai")
 
     job_id, job_dir = new_job()
+    if pays:
+        try:
+            accounts.spend(user["id"], job_id)
+        except NoCredits as exc:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            raise HTTPException(402, _no_credits_message()) from exc
     (job_dir / "sheet.txt").write_text(sheet, encoding="utf-8")
     started = time.monotonic()
     log = {"name": details.get("Student Name", ""), "uid": details.get("UID", ""), "ip": ip, "subject": subject,
-           "language": language, "sheet": sheet, "error": "", "tasks": [], "cached": False}
+           "email": user["email"] if user else "", "language": language, "sheet": sheet, "error": "", "tasks": [],
+           "cached": False}
+    full: dict = {"tasks": [], "title": ""}  # the whole draft, kept only if something went wrong
 
     def produce(stop: threading.Event):
         # Runs in the background: the report keeps being written if the page goes away.
@@ -277,6 +405,7 @@ async def create_draft(
                 if event["type"] in ("draft", "done"):
                     log["title"] = event["draft"].get("title", "")
                     log["tasks"] = task_summary(event["draft"]["tasks"])
+                    full["tasks"], full["title"] = event["draft"]["tasks"], event["draft"].get("title", "")
                     log["cached"] = event.get("cached", False)
                 yield event
                 if stop.is_set():
@@ -290,12 +419,29 @@ async def create_draft(
             log["error"] = f"{type(exc).__name__}: {exc}"
             yield {"type": "error", "message": "Something went wrong while writing. Try again."}
 
-    def finished(_events):
-        if not owner:
-            activity.record("draft", job_id, seconds=round(time.monotonic() - started), **log)
+    def finished(events):
+        written = any(e.get("type") == "done" for e in events)
+        if pays and not written:
+            accounts.refund(user["id"], job_id)  # nothing came out: the credit goes back
+        if owner:
+            return
+        activity.record("draft", job_id, seconds=round(time.monotonic() - started), **log)
+        stopped = log["error"] == "Stopped by the student."
+        reason = "" if stopped else flag_reason(log["error"], full["tasks"])
+        if reason:
+            _flag(job_id, job_id, "draft", reason, user, sheet=sheet, language=language, subject=subject,
+                  title=full["title"], cached=log["cached"], error=log["error"], ip=hash_ip(ip), tasks=full["tasks"])
 
     jobs.start(job_id, job_dir, {"type": "job", "job": job_id, "details": details}, produce, finished)
     return _ndjson(jobs.stream(job_id, job_dir, -1, STREAM_PING_SECONDS))
+
+
+def _flag(flag_id: str, job_id: str, kind: str, reason: str, user: dict | None, **data) -> None:
+    """Keep a copy of a session that went wrong, for the owner to review. Never breaks the request."""
+    try:
+        accounts.flag(flag_id, job_id, kind, reason, data, user)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[flags] {type(exc).__name__}: {exc}")
 
 
 @app.get("/api/jobs/{job_id}/events")
@@ -344,6 +490,13 @@ def run_one(job_id: str, body: RunRequest, request: Request):
     if not _is_owner(request):
         activity.record("run", job_id, index=index, ip=client_ip(request), title=task.title, status=task.status,
                         edited=edited, note=task.note[:300], output=task.output[-600:])
+        if task.status == "failed":
+            try:
+                sheet = (job_dir / "sheet.txt").read_text(encoding="utf-8")
+            except OSError:
+                sheet = ""
+            _flag(f"{job_id}:{index}", job_id, "run", flag_reason("", [task.model_dump()]), current_user(request),
+                  sheet=sheet, ip=hash_ip(client_ip(request)), tasks=[{**task.model_dump(), "edited": edited}])
     return task
 
 
@@ -416,6 +569,7 @@ class ExplainRequest(BaseModel):
 def explain(job_id: str, body: ExplainRequest, request: Request):
     """How the program works and likely viva questions, so the student can explain their own report."""
     _job(job_id)
+    need_user(request)
     task = body.task
     files = [f for f in task.files if f.code.strip()][:10]
     if not files:
@@ -533,6 +687,64 @@ def admin_activity(request: Request, days: int = 7):
     return {"days": days, "storage": activity.storage, "reports": reports}
 
 
+@app.get("/api/admin/flags")
+def admin_flags(request: Request, days: int = 30):
+    """Sessions that went wrong: failed or unsupported programs, and errors while writing."""
+    _admin(request)
+    return {"days": days, "keep_days": accounts.flag_days(), "flags": accounts.flags(max(1, min(days, 365)))}
+
+
+@app.get("/api/admin/flags/{flag_id}")
+def admin_flag(flag_id: str, request: Request):
+    _admin(request)
+    found = accounts.flag_detail(flag_id)
+    if found is None:
+        raise HTTPException(404, "That session is no longer kept.")
+    return found
+
+
+@app.delete("/api/admin/flags/{flag_id}")
+def admin_flag_delete(flag_id: str, request: Request):
+    _admin(request)
+    accounts.delete_flag(flag_id)
+    return {"ok": True}
+
+
+@app.get("/api/admin/users")
+def admin_users(request: Request):
+    _admin(request)
+    return {"storage": accounts.storage(), "users": accounts.users()}
+
+
+class GrantRequest(BaseModel):
+    email: str = Field(max_length=254)
+    amount: int = Field(ge=-1000, le=1000)
+
+
+@app.post("/api/admin/credits")
+def admin_credits(body: GrantRequest, request: Request):
+    _admin(request)
+    try:
+        return accounts.grant(body.email, body.amount, "owner")
+    except AccountError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+
+
+class BlockRequest(BaseModel):
+    email: str = Field(max_length=254)
+    blocked: bool
+
+
+@app.post("/api/admin/block")
+def admin_block(body: BlockRequest, request: Request):
+    _admin(request)
+    try:
+        accounts.set_blocked(body.email, body.blocked)
+    except AccountError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    return {"ok": True}
+
+
 @app.get("/api/admin/status")
 def admin_status(request: Request):
     _admin(request)
@@ -546,6 +758,9 @@ def admin_status(request: Request):
         "pdf": PdfConverter().available(),
         "database": bool(database_url()),
         "limiter": type(limiter).__name__,
+        "login_required": login_required(),
+        "mail": mailer.backend() or "not set up",
+        "email_domains": allowed_domains(),
         "client_ip": client_ip(request),
         "ip_headers": {h: request.headers.get(h, "") for h in (
             "x-forwarded-for", "x-real-ip", "true-client-ip", "cf-connecting-ip")},
@@ -622,7 +837,7 @@ learning outcomes, as a Word or PDF file in a university format.
 - Website: {base}/
 - Made by: {AUTHOR}, a student at {AUTHOR_AFFILIATION}. About the maker: {base}{AUTHOR_PATH}
 - Source code: {REPO_URL}
-- Price: free (ad-supported), no account needed
+- Price: free (ad-supported); students sign in with their college email
 - Languages it runs: Java (incl. Spring Boot), Python (NumPy, Matplotlib, OpenCV, scikit-image), C, C++, Node.js \
 (Express, Mongoose), React, SQL, HTML/CSS/JS
 - Independent project, not affiliated with any university

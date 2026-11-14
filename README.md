@@ -21,9 +21,16 @@ screenshots and learning outcomes, laid out the way your college wants it.
 - **Cheap to run.** One model call per new sheet, cached by content, so a whole
   class uploading the same sheet costs one call. Changing your name, date or
   subject never calls the model. Free-tier providers fail over automatically.
-- **No accounts.** Your details are saved in your browser and sent only when the
-  Word or PDF file is made. Reports are deleted after a few hours, or at once
-  with "Delete this report from the server". Ad-supported (AdSense slots built in).
+- **Sign in with a college email.** A 6-digit code is emailed (no passwords),
+  only `@cuchd.in` addresses by default. Each account gets a few free reports
+  a day; a report that fails costs nothing.
+- **Reports stay on the student's device.** Name and UID are saved in the
+  browser and sent only when the Word or PDF file is made. Finished files are
+  kept in the browser, encrypted with a key only that account gets; the server
+  deletes its copy after a few hours. Ad-supported (AdSense slots built in).
+- **Problems come to you.** A session whose program failed or couldn't be run
+  is saved (sheet, code, input, output, errors) and shown under "Failed
+  sessions" in `/admin`, so you can see what to add next.
 - **Understand it, don't just submit it.** "Explain this code" walks through
   each program and offers likely viva questions with answers.
 
@@ -77,6 +84,7 @@ sheet ─► extract text ─► condense (drop tutorial text, links, boilerplat
 | `apps/worker/main.py` | Execution worker: runs programs on a separate machine (`EXEC_BACKEND=remote`) |
 | `core/pipeline/jobs.py` | Reports are written in the background; a dropped connection picks up where it was |
 | `core/limits.py`, `core/db.py` | Limits per browser and per IP; Postgres for cache, limits and logs |
+| `core/accounts.py`, `core/mailer.py` | Sign-in by emailed code, sessions, report credits, saved failed sessions |
 | `apps/frontend/` | React app: the live page preview is the editor |
 
 ## Configuration

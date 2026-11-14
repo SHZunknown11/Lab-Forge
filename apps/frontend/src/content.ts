@@ -39,7 +39,7 @@ export const FAQ: QA[] = [
   },
   {
     q: "Is LabForge free?",
-    a: "Yes. It's free and supported by ads. You can write {daily} new sheets a day; a sheet someone has already uploaded is reused for free and doesn't count.",
+    a: "Yes. It's free and supported by ads. Sign in with your college email and you get a few free reports every day. A report that fails to be written doesn't count.",
   },
   {
     q: "Does my report match my classmates'?",
@@ -51,11 +51,15 @@ export const FAQ: QA[] = [
   },
   {
     q: "Do I need an account?",
-    a: "No. Your details are saved in your browser only.",
+    a: "Yes, to write a report. Type your college email address, we send it a 6-digit code, and you're signed in. There is no password. Your name, UID and your finished reports are saved in your browser only.",
+  },
+  {
+    q: "Where are my old reports?",
+    a: "Under \"Your reports\" on the device you made them on, locked to your account. LabForge doesn't keep your finished reports on its server, so they aren't on your other devices, and clearing the site's data in your browser removes them.",
   },
   {
     q: "How do I delete my data?",
-    a: "Use \"Delete this report from the server\" in the download step. To clear what's saved in your browser, clear this site's data in your browser settings. For anything else, use the contact address on the privacy page.",
+    a: "Use \"Delete this report from the server\" in the download step. To clear what's saved in your browser, clear this site's data in your browser settings. To delete your account, or for anything else, use the contact address on the privacy page.",
   },
   {
     q: "Is LabForge made by my university?",

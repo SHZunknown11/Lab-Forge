@@ -40,6 +40,7 @@ def scrub(row: dict) -> dict:
     if not _personal():
         row.pop("name", None)
         row.pop("uid", None)
+        row.pop("email", None)
         if row.get("ip"):
             row["ip"] = hash_ip(row["ip"])
     if isinstance(row.get("sheet"), str):

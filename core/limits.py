@@ -123,4 +123,7 @@ def limits() -> dict[str, tuple[int, int, int]]:
         "feedback": (20, 80, 3600),
         "explain": (_env("LABFORGE_EXPLAIN_DAILY_LIMIT", 20), 120, 86400),
         "deletes": (30, 120, 3600),
+        # Sign-in codes: a whole campus can share one IP address, so the IP allowance is wide.
+        "codes": (6, 300, 3600),
+        "verify": (20, 600, 3600),
     }

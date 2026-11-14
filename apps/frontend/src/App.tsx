@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
-  ApiError, cancelJob, createDraft, deleteJob, fileUrl, getMeta, renderReport, resumeDraft, runTask, uploadImage,
+  ApiError, cancelJob, createDraft, deleteJob, fetchFile, fileUrl, getMe, getMeta, renderReport, resumeDraft, runTask,
+  uploadImage,
 } from "./api"
+import { Account, creditsLine } from "./components/Account"
 import { AdSlot } from "./components/AdSlot"
+import { History } from "./components/History"
 import { HomeIntro, InfoPage } from "./components/InfoPage"
 import { AUTHOR, AUTHOR_PATH } from "./content"
 import { Paper, type Progress } from "./components/Paper"
 import { Feedback } from "./components/Feedback"
 import { Review } from "./components/Review"
+import { historySupported, saveReport } from "./history"
 import { ROUTES, pageTitle, type Route } from "./routes"
 import { defaultFields, documentOrder, today, uid, useStored, type RecentSubject } from "./store"
-import type { Draft, DraftEvent, Field, Meta, RenderResult, SavedJob, Task } from "./types"
+import type { Draft, DraftEvent, Field, Me, Meta, RenderResult, SavedJob, Task } from "./types"
 
 const EMPTY_PROGRESS: Progress = { stages: [], tasks: {} }
 
@@ -107,6 +111,8 @@ export default function App() {
   const [view, setView] = useState<"edit" | "preview">("edit")
   const [revealKey, setRevealKey] = useState("start")
   const [autoMake, setAutoMake] = useState(false)
+  const [me, setMe] = useState<Me | null>(null)
+  const [historyVersion, setHistoryVersion] = useState(0)
   const abort = useRef<AbortController | null>(null)
   const writingJob = useRef("")
 
@@ -123,6 +129,13 @@ export default function App() {
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const refreshMe = useCallback(() => {
+    getMe()
+      .then(setMe)
+      .catch(() => {})
+  }, [])
+  useEffect(refreshMe, [refreshMe])
 
   // First visit: default fields. Every visit: the date starts as today.
   useEffect(() => {
@@ -294,11 +307,21 @@ export default function App() {
     if (!flow.cached) {
       setMeta((m) => (m ? { ...m, limits: { ...m.limits, remaining: Math.max(0, m.limits.remaining - 1) } } : m))
     }
+    refreshMe() // one report fewer left
+  }
+
+  /** Not signed in (any more), or out of reports: show the account as it now is. */
+  function accountProblem(e: unknown) {
+    if (e instanceof ApiError && (e.status === 401 || e.status === 402)) refreshMe()
   }
 
   async function write(fresh = false) {
     if (!fresh && !sheetFile && !sheetText.trim()) {
       setError("Add the experiment sheet first: choose a file or paste its text.")
+      return
+    }
+    if (meta?.auth.required && !me?.user) {
+      setError("Sign in with your college email first. It's at the top of this panel.")
       return
     }
     const subject = value("subject name")
@@ -335,12 +358,14 @@ export default function App() {
       }
       afterWriting(flow)
     } catch (e) {
+      accountProblem(e)
       if ((e as Error).name !== "AbortError" && !handleExpired(e)) setError((e as Error).message)
       setView("edit")
     } finally {
       setWriting(false)
       setProgress((p) => ({ ...p, tasks: {} }))
       writingJob.current = ""
+      if (flow.failed) setTimeout(refreshMe, 1500) // a report that failed gives its credit back
     }
   }
 
@@ -377,7 +402,7 @@ export default function App() {
 
   async function removeFromServer() {
     if (!job) return
-    if (!window.confirm("Delete this report and its files from the server? Your details in this browser stay.")) return
+    if (!window.confirm("Delete this report and its files from the server? Your details and saved reports in this browser stay.")) return
     try {
       await deleteJob(job.id)
     } catch (e) {
@@ -448,10 +473,34 @@ export default function App() {
       })
       setRender(result)
       setRenderKey(key)
+      void remember(job.id, job.draft, result)
     } catch (e) {
       if (!handleExpired(e)) setRenderError((e as Error).message)
     } finally {
       setRendering(false)
+    }
+  }
+
+  /** Keep the finished files on this device, locked to the account. The server deletes its copy. */
+  async function remember(jobId: string, draft: Draft, result: RenderResult) {
+    if (!me?.user || !me.history_key || !historySupported()) return
+    try {
+      const docx = await fetchFile(jobId, result.docx, result.render)
+      const pdf = result.pdf ? await fetchFile(jobId, result.pdf, result.render) : null
+      const numbered = /^\s*experiment\b/i.test(draft.title) // some sheets' titles already say "Experiment 3"
+      const title = [!numbered && draft.experiment_no && `Experiment ${draft.experiment_no}`, draft.title]
+        .filter(Boolean)
+        .join(": ")
+      await saveReport(
+        me.user.email,
+        me.history_key,
+        { id: jobId, title, subject: value("subject name"), docxName: result.docx, pdfName: result.pdf ?? "" },
+        docx,
+        pdf,
+      )
+      setHistoryVersion((v) => v + 1)
+    } catch {
+      /* storage blocked or full: the download buttons still work */
     }
   }
 
@@ -504,6 +553,8 @@ export default function App() {
             {metaError}
           </p>
         )}
+
+        {meta && (meta.auth.required || me?.user) && <Account auth={meta.auth} me={me} onChange={setMe} />}
 
         <section className="step" aria-labelledby="s1">
           <h2 id="s1">
@@ -631,9 +682,16 @@ export default function App() {
           {meta && !meta.ai_ready && (
             <p className="hint">The server has no AI key yet, so only sheets that were written before will work.</p>
           )}
-          {meta && meta.ai_ready && (
+          {meta && meta.ai_ready && !meta.auth.required && (
             <p className="hint">
               {meta.limits.remaining} of {meta.limits.daily} new sheets left today. Sheets someone already uploaded don't count.
+            </p>
+          )}
+          {meta && meta.auth.required && (
+            <p className="hint">
+              {me?.user
+                ? `${creditsLine(me)}. Writing the same sheet again doesn't use one.`
+                : "Sign in at the top of this panel to write a report."}
             </p>
           )}
         </section>
@@ -760,6 +818,10 @@ export default function App() {
               </button>
             </div>
           </section>
+        )}
+
+        {me?.user && me.history_key && (
+          <History owner={me.user.email} historyKey={me.history_key} version={historyVersion} />
         )}
 
         <footer className="railfoot">

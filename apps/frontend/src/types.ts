@@ -51,9 +51,25 @@ export interface Meta {
   pdf: boolean
   ai_ready: boolean
   limits: { daily: number; remaining: number }
+  auth: { required: boolean; domains: string[]; free: number; period: "day" | "month"; flag_days: number }
   job_ttl_hours: number
   log_days: number
   log_personal: boolean
+}
+
+export interface Credits {
+  free: number
+  free_total: number
+  extra: number
+  left: number
+  period: "day" | "month"
+}
+
+/** The signed-in student. `history_key` locks the reports kept on this device. */
+export interface Me {
+  user: { email: string } | null
+  credits?: Credits
+  history_key?: string
 }
 
 export interface Explanation {

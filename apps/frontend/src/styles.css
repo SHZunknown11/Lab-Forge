@@ -1627,3 +1627,94 @@ textarea.code {
 .railfoot__note a {
   color: var(--ink);
 }
+
+/* ── account and on-device history ─────────────────────────────── */
+.account {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--paper);
+}
+
+.account h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.account form {
+  display: grid;
+  gap: 8px;
+}
+
+.account--in {
+  gap: 2px;
+}
+
+.account__who {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.account .hint {
+  margin: 0;
+}
+
+.history__list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.history__list li {
+  display: grid;
+  gap: 2px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.history__what {
+  display: grid;
+  overflow-wrap: anywhere;
+}
+
+.history__what small {
+  color: var(--muted);
+}
+
+.history__get {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.admin__tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.admin__tabs button[aria-selected="true"] {
+  background: var(--graphite);
+  color: #fff;
+}
+
+.admin__code {
+  max-height: 420px;
+  overflow: auto;
+}
+
+.admin__users {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.admin__users th,
+.admin__users td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
