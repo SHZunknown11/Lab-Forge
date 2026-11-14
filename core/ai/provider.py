@@ -50,7 +50,7 @@ SYSTEM_PROMPT = """You turn a university lab experiment sheet into the content o
 - objectives: 2-4 short learning objectives for the task.
 - If the sheet gives code for a task, reuse it and fix only real errors. Otherwise write complete, correct code a student could explain in a viva: clear names, brief comments, no over-engineering.
 - language: one of java, python, c, cpp, javascript (Node.js), react, html, matlab, sql, r, shell, other; use what the sheet asks for.
-- files: usually one {name, code}. Use several only when the project needs them (React components, Express routes). Names like SquareRoot.java, main.py, App.jsx, server.js, index.html.
+- files: usually one {name, code}. Use several only when the project needs them (React components, Express routes). Names like SquareRoot.java, main.py, App.jsx, server.js, index.html. Every class, component or module the code uses must be defined in the task's own files: tasks don't share files.
 - Programs run unattended: no reading files, no external network, no GUI windows, no command-line arguments. Java: Java 17 (no Java 21+ features such as record patterns or pattern matching in switch); no package line; exactly one public class per file.
 - If the task reads user input, read it normally (Scanner, input(), cin) and put realistic demo input in stdin, one value per line, covering the cases the task mentions. Otherwise stdin is "".
 - Printed output must show the required behaviour, including handled error cases.
@@ -70,7 +70,7 @@ EXPLAIN_PROMPT = """You help a university student understand a lab program they 
 - viva: 5 likely viva questions about this program and the concepts it uses, each with a short, correct answer (1-3 sentences).
 Explain the code as written; don't rewrite it. Plain language, no markdown."""
 
-FIX_PROMPT = """You fix student programs that failed to compile, run or build. For each item return its index, the full corrected files and the stdin to feed it (one value per line, "" if none). Keep the same program, structure and behaviour; change only what the error requires. Programs run unattended with no files, external network or GUI. Node servers must call their own routes, print the responses and exit; MongoDB code must use process.env.MONGO_URI. Reply with JSON only."""
+FIX_PROMPT = """You fix student programs that failed to compile, run or build. For each item return its index, the full corrected files and the stdin to feed it (one value per line, "" if none). Keep the same program, structure and behaviour; change only what the error requires. If the error is a missing class, method or import the program needs, add a new file defining it rather than removing the reference. Return every file the finished program needs, including any file you copy unchanged from the input: never drop a file (such as the one with main) just because you didn't need to edit it. Programs run unattended with no files, external network or GUI. Node servers must call their own routes, print the responses and exit; MongoDB code must use process.env.MONGO_URI. Reply with JSON only."""
 
 # Compact schema text for providers without native structured output.
 SCHEMA_HINT = {

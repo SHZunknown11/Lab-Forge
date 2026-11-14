@@ -176,7 +176,7 @@ def build_draft(
         changed = []
         for fx in fixes:
             if fx.index in failing and any(f.code.strip() for f in fx.files):
-                draft.tasks[fx.index].files = [CodeFile(name=f.name, code=f.code.rstrip()) for f in fx.files]
+                draft.tasks[fx.index].files = _merge_fix(draft.tasks[fx.index].files, fx.files)
                 draft.tasks[fx.index].stdin = fx.stdin
                 changed.append(fx.index)
         if changed:
@@ -189,6 +189,16 @@ def build_draft(
                 cache.put(key, report)  # the next student skips the fix
 
     yield {"type": "done", "draft": draft.model_dump(), "cached": cached}
+
+
+def _merge_fix(files: list[CodeFile], fixed: list[AIFile]) -> list[CodeFile]:
+    """Apply a fix by file name: update or add what the model returned and keep every file it
+    didn't send back. Models often return only the file they changed; replacing the whole list
+    with that answer deleted the program's other files and turned a good fix into a new error."""
+    updates = {f.name: CodeFile(name=f.name, code=f.code.rstrip()) for f in fixed if f.name.strip()}
+    unnamed = [CodeFile(name=f.name, code=f.code.rstrip()) for f in fixed if not f.name.strip()]
+    kept = [updates.pop(f.name, f) for f in files]
+    return kept + list(updates.values()) + unnamed  # files only the fix introduced, in the order they came
 
 
 def to_draft(report: AIReport) -> ReportDraft:
