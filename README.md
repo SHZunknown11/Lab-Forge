@@ -30,7 +30,11 @@ screenshots and learning outcomes, laid out the way your college wants it.
   deletes its copy after a few hours. Ad-supported (AdSense slots built in).
 - **Problems come to you.** A session whose program failed or couldn't be run
   is saved (sheet, code, input, output, errors) and shown under "Failed
-  sessions" in `/admin`, so you can see what to add next.
+  sessions" in `/admin`. What LabForge couldn't do at all (a language, a
+  missing library) is counted under "Gaps", and you get a Telegram or email
+  alert when several reports hit the same one.
+- **Ads that pay for the server.** Out of free reports, a student can watch a
+  rewarded ad (Google Ad Manager) for another one, a few times a day.
 - **Understand it, don't just submit it.** "Explain this code" walks through
   each program and offers likely viva questions with answers.
 
@@ -84,7 +88,8 @@ sheet ─► extract text ─► condense (drop tutorial text, links, boilerplat
 | `apps/worker/main.py` | Execution worker: runs programs on a separate machine (`EXEC_BACKEND=remote`) |
 | `core/pipeline/jobs.py` | Reports are written in the background; a dropped connection picks up where it was |
 | `core/limits.py`, `core/db.py` | Limits per browser and per IP; Postgres for cache, limits and logs |
-| `core/accounts.py`, `core/mailer.py` | Sign-in by emailed code, sessions, report credits, saved failed sessions |
+| `core/accounts.py`, `core/mailer.py` | Sign-in by emailed code, sessions, report credits, ad rewards, saved failed sessions |
+| `core/gaps.py`, `core/notify.py` | Names what LabForge couldn't do; alerts the owner on Telegram or by email |
 | `apps/frontend/` | React app: the live page preview is the editor |
 
 ## Configuration

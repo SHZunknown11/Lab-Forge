@@ -32,6 +32,9 @@ def isolated_storage(tmp_path, monkeypatch):
     monkeypatch.setenv("LABFORGE_FREE_REPORTS", "3")
     monkeypatch.setenv("LABFORGE_FREE_PERIOD", "day")
     monkeypatch.setenv("LABFORGE_MAIL_BACKEND", "")
+    monkeypatch.setenv("LABFORGE_AD_REWARDS_PER_DAY", "0")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")  # no alert ever leaves a test run
+    monkeypatch.setenv("LABFORGE_OWNER_EMAIL", "")
     monkeypatch.setenv("RESEND_API_KEY", "")
     monkeypatch.setenv("SMTP_HOST", "")
     monkeypatch.setenv("LABFORGE_USAGE_LOG", str(tmp_path / "usage.jsonl"))

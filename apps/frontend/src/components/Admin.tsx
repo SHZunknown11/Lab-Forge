@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Flags, Users } from "./AdminAccounts"
+import { Flags, Gaps, Users } from "./AdminAccounts"
 
 /** Private activity panel at /admin: who made which report and whether its programs ran. */
 
@@ -66,7 +66,8 @@ export default function Admin() {
   const [issuesOnly, setIssuesOnly] = useState(false)
   const [vote, setVote] = useState<"" | "up" | "down" | "any">("")
   const [open, setOpen] = useState<string | null>(null)
-  const [tab, setTab] = useState<"activity" | "flags" | "users">("activity")
+  const [tab, setTab] = useState<"activity" | "flags" | "gaps" | "users">("activity")
+  const [flagQuery, setFlagQuery] = useState("")
 
   const load = useCallback(async () => {
     if (!token) return
@@ -156,7 +157,7 @@ export default function Admin() {
       <header className="admin__head">
         <h1>Activity</h1>
         <div className="admin__tabs" role="tablist" aria-label="View">
-          {([["activity", "All reports"], ["flags", "Failed sessions"], ["users", "Accounts"]] as const).map(([id, label]) => (
+          {([["activity", "All reports"], ["flags", "Failed sessions"], ["gaps", "Gaps"], ["users", "Accounts"]] as const).map(([id, label]) => (
             <button key={id} role="tab" className="btn btn--quiet" aria-selected={tab === id} onClick={() => setTab(id)}>
               {label}
             </button>
@@ -170,7 +171,13 @@ export default function Admin() {
         </button>
       </header>
 
-      {tab === "flags" && <Flags token={token} />}
+      {tab === "flags" && <Flags key={flagQuery} token={token} initialQuery={flagQuery} />}
+      {tab === "gaps" && (
+        <Gaps token={token} onOpen={(job) => {
+          setFlagQuery(job)
+          setTab("flags")
+        }} />
+      )}
       {tab === "users" && <Users token={token} />}
       {tab === "activity" && (
       <>

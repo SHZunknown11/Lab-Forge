@@ -43,6 +43,18 @@ services:
         generateValue: true
       - key: RESEND_API_KEY
         sync: false
+      # Extra reports for watching an ad: set a number (e.g. 5) once VITE_REWARDED_AD_UNIT is set.
+      - key: LABFORGE_AD_REWARDS_PER_DAY
+        value: "0"
+      - key: VITE_REWARDED_AD_UNIT
+        sync: false
+      # Alerts when several students hit something LabForge can't do (docs/deployment.md).
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: LABFORGE_OWNER_EMAIL
+        sync: false
       - key: LABFORGE_MAIL_FROM
         sync: false
       # Programs run on a separate worker machine (apps/worker), not on this server.

@@ -74,6 +74,38 @@ block an account; **Failed sessions** shows every session where a program
 failed or couldn't be run, with the sheet, the code and the error, kept for
 `LABFORGE_FLAG_DAYS` days.
 
+## Extra reports for watching an ad
+
+A signed-in student who has run out of free reports can watch an ad for another one
+(`apps/frontend/src/rewarded.ts`, `/api/ads/ticket` and `/api/ads/claim`).
+
+1. In Google Ad Manager, create a **rewarded** ad unit for the web and copy its path
+   (`/<network code>/<unit name>`). Ordinary AdSense display units must not be used for this:
+   rewarding visitors for looking at them is against AdSense policy. The rewarded format is
+   the one made for it.
+2. Build the frontend with `VITE_REWARDED_AD_UNIT=<that path>`.
+3. Set `LABFORGE_AD_REWARDS_PER_DAY` (e.g. `5`) on the server. `0` keeps the feature off.
+
+The browser tells the server the ad was watched, and the server has no way to confirm it with
+Google, so a student who knows how can claim reports without watching. Three things limit
+that: a ticket can't be claimed sooner than `LABFORGE_AD_MIN_SECONDS` after it was issued,
+each ticket pays once, and the daily cap. Keep the cap low.
+
+`VITE_REWARDED_AD_TEST=1` shows a labelled stand-in with a countdown, to try the flow without
+an ad account.
+
+## Gaps: what to add next
+
+Whenever a report hits something LabForge can't do (a language it can't run, a library that
+isn't installed, a program that needs a window, the runner being offline), it is counted
+under a stable name (`core/gaps.py`). The **Gaps** tab in `/admin` lists them, most reports
+first, with the subjects they came from and a link to the latest saved session.
+
+When `LABFORGE_GAP_ALERT_AT` reports (default 3) have hit the same gap you get one alert: on
+Telegram if `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set, otherwise by email to
+`LABFORGE_OWNER_EMAIL`. A runner that is offline alerts the first time. "Dealt with" in the
+tab clears a gap, so it alerts again if it ever comes back.
+
 ## Running student code safely
 
 Uploaded sheets decide what code the model writes, so treat every program as

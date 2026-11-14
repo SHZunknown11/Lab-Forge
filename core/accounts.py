@@ -10,6 +10,12 @@ Everything lives in Postgres when LABFORGE_DATABASE_URL is set, otherwise in a S
   extra credits the owner grants (later: rewarded ads). Every change is one ledger row.
 - A report whose programs failed or couldn't be run is copied to lf_flags (sheet, code, input,
   output, errors) so the owner can see what went wrong. Kept LABFORGE_FLAG_DAYS days.
+- Rewarded ads: the page asks for a ticket, shows the ad, then claims the ticket for an extra
+  report. A ticket can't be claimed sooner than an ad lasts, and only
+  LABFORGE_AD_REWARDS_PER_DAY a day (0, the default, turns the whole thing off). The browser
+  tells us the ad was watched and we can't check that, so the daily cap is the real limit.
+- Gaps (core/gaps.py): one row per report that hit something LabForge can't do, counted per gap
+  for /admin, with one alert to the owner when LABFORGE_GAP_ALERT_AT reports have hit it.
 """
 from __future__ import annotations
 
@@ -37,6 +43,8 @@ RESEND_SECONDS = 60
 SESSION_DAYS = 30
 MAX_FILE_CHARS = 20_000
 MAX_SHEET_CHARS = 30_000
+AD_TICKET_MINUTES = 15
+GAP_DAYS = 180
 IST = 19800  # days and months roll over at midnight in India
 
 SCHEMA = (
@@ -56,6 +64,12 @@ SCHEMA = (
     "CREATE TABLE IF NOT EXISTS lf_flags (id TEXT PRIMARY KEY, ts DOUBLE PRECISION NOT NULL, user_id TEXT NOT NULL, "
     "email TEXT NOT NULL, job TEXT NOT NULL, kind TEXT NOT NULL, reason TEXT NOT NULL, data TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS lf_flags_ts ON lf_flags (ts)",
+    "CREATE TABLE IF NOT EXISTS lf_ad_tickets (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, "
+    "created DOUBLE PRECISION NOT NULL, claimed INTEGER NOT NULL DEFAULT 0)",
+    "CREATE TABLE IF NOT EXISTS lf_gaps (id TEXT PRIMARY KEY, key TEXT NOT NULL, kind TEXT NOT NULL, "
+    "label TEXT NOT NULL, ts DOUBLE PRECISION NOT NULL, user_id TEXT NOT NULL DEFAULT '', job TEXT NOT NULL, "
+    "subject TEXT NOT NULL DEFAULT '', uniq TEXT UNIQUE)",
+    "CREATE INDEX IF NOT EXISTS lf_gaps_key ON lf_gaps (key, ts)",
 )
 
 
@@ -89,6 +103,27 @@ def free_period() -> str:
 def _period_key(now: float | None = None) -> str:
     t = time.gmtime((now or time.time()) + IST)
     return time.strftime("%Y-%m" if free_period() == "month" else "%Y-%m-%d", t)
+
+
+def ad_rewards_per_day() -> int:
+    return max(0, _env_int("LABFORGE_AD_REWARDS_PER_DAY", 0))
+
+
+def ad_reward() -> int:
+    return max(1, _env_int("LABFORGE_AD_REWARD", 1))
+
+
+def ad_min_seconds() -> int:
+    return max(0, _env_int("LABFORGE_AD_MIN_SECONDS", 15))
+
+
+def gap_alert_at() -> int:
+    return max(1, _env_int("LABFORGE_GAP_ALERT_AT", 3))
+
+
+def _day_start(now: float | None = None) -> float:
+    now = now or time.time()
+    return now - ((now + IST) % 86400)
 
 
 def allowed_domains() -> list[str]:
@@ -317,6 +352,105 @@ class Accounts:
                 "INSERT INTO lf_credits (id, user_id, delta, kind, period, reason, ts) VALUES (%s, %s, %s, 'extra', '', %s, %s)",
                 (uuid.uuid4().hex, user["id"], int(amount), reason[:60], time.time()))
             return self._balance(conn, user["id"])
+
+    # ── rewarded ads ───────────────────────────────────────────────
+    @staticmethod
+    def _ads_left(conn: _Conn, user_id: str) -> int:
+        used = conn.execute("SELECT COUNT(*) FROM lf_credits WHERE user_id = %s AND reason = 'ad' AND ts >= %s",
+                            (user_id, _day_start())).fetchone()[0]
+        return max(0, ad_rewards_per_day() - int(used))
+
+    def ads(self, user_id: str) -> dict:
+        """What the page needs to offer "watch an ad for another report"."""
+        per_day = ad_rewards_per_day()
+        if not per_day:
+            return {"enabled": False, "left": 0, "per_day": 0, "reward": 0, "min_seconds": 0}
+        with self._db() as conn:
+            left = self._ads_left(conn, user_id)
+        return {"enabled": True, "left": left, "per_day": per_day, "reward": ad_reward(),
+                "min_seconds": ad_min_seconds()}
+
+    def ad_ticket(self, user_id: str) -> str:
+        """Handed out before the ad starts; claimed after it ends."""
+        if not ad_rewards_per_day():
+            raise AccountError("Ads for extra reports aren't turned on.", 404)
+        now = time.time()
+        with self._lock, self._db() as conn:
+            if self._ads_left(conn, user_id) <= 0:
+                raise AccountError("You've had today's extra reports from ads. More tomorrow.", 429)
+            ticket = secrets.token_urlsafe(24)
+            conn.execute("INSERT INTO lf_ad_tickets (id, user_id, created) VALUES (%s, %s, %s)", (ticket, user_id, now))
+            if random.random() < 0.05:
+                conn.execute("DELETE FROM lf_ad_tickets WHERE created < %s", (now - 86400,))
+        return ticket
+
+    def ad_claim(self, user_id: str, ticket: str) -> dict:
+        """The ad was watched: one more report. Each ticket pays out once."""
+        now = time.time()
+        with self._lock, self._db() as conn:
+            row = conn.execute("SELECT created, claimed FROM lf_ad_tickets WHERE id = %s AND user_id = %s",
+                               ((ticket or "")[:100], user_id)).fetchone()
+            if not row or int(row[1]) or now - float(row[0]) > AD_TICKET_MINUTES * 60:
+                raise AccountError("That ad has expired. Start it again.", 400)
+            if now - float(row[0]) < ad_min_seconds():
+                raise AccountError("The ad hasn't finished yet.", 400)
+            if self._ads_left(conn, user_id) <= 0:
+                raise AccountError("You've had today's extra reports from ads. More tomorrow.", 429)
+            conn.execute("UPDATE lf_ad_tickets SET claimed = 1 WHERE id = %s", (ticket,))
+            conn.execute(
+                "INSERT INTO lf_credits (id, user_id, delta, kind, period, reason, ts, uniq) "
+                "VALUES (%s, %s, %s, 'extra', '', 'ad', %s, %s) ON CONFLICT (uniq) DO NOTHING",
+                (uuid.uuid4().hex, user_id, ad_reward(), now, f"ad:{ticket}"))
+            return self._balance(conn, user_id)
+
+    # ── gaps ───────────────────────────────────────────────────────
+    def record_gaps(self, gaps: list[dict], job: str, user: dict | None = None, subject: str = "") -> list[dict]:
+        """Count each gap once per report. Returns the gaps that just reached the alert level
+        (each gap alerts once; a runner that is offline alerts the first time)."""
+        now = time.time()
+        crossed = []
+        with self._lock, self._db() as conn:
+            for gap in gaps:
+                conn.execute(
+                    "INSERT INTO lf_gaps (id, key, kind, label, ts, user_id, job, subject, uniq) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (uniq) DO NOTHING",
+                    (uuid.uuid4().hex, gap["key"], gap["kind"], gap["label"], now, (user or {}).get("id", ""), job,
+                     subject[:120], f"{gap['key']}|{job}"))
+                count = int(conn.execute("SELECT COUNT(*) FROM lf_gaps WHERE key = %s", (gap["key"],)).fetchone()[0])
+                if count >= (1 if gap["kind"] == "runner" else gap_alert_at()):
+                    marker = f"gap_alert:{gap['key']}"
+                    if not conn.execute("SELECT 1 FROM lf_meta WHERE key = %s", (marker,)).fetchone():
+                        conn.execute("INSERT INTO lf_meta (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
+                                     (marker, str(now)))
+                        crossed.append({**gap, "count": count})
+            if random.random() < 0.02:
+                conn.execute("DELETE FROM lf_gaps WHERE ts < %s", (now - GAP_DAYS * 86400,))
+        return crossed
+
+    def gaps(self, days: int = 90) -> list[dict]:
+        """One entry per gap, most reports first."""
+        with self._db() as conn:
+            rows = conn.execute("SELECT key, kind, label, ts, user_id, job, subject FROM lf_gaps WHERE ts >= %s "
+                                "ORDER BY ts DESC LIMIT 20000", (time.time() - days * 86400,)).fetchall()
+        out: dict[str, dict] = {}
+        for key, kind, label, ts, user_id, job, subject in rows:
+            g = out.setdefault(key, {"key": key, "kind": kind, "label": label, "reports": 0, "students": set(),
+                                     "subjects": [], "last": float(ts), "first": float(ts), "job": job})
+            g["reports"] += 1
+            g["first"] = float(ts)
+            if user_id:
+                g["students"].add(user_id)
+            if subject and subject not in g["subjects"] and len(g["subjects"]) < 8:
+                g["subjects"].append(subject)
+        for g in out.values():
+            g["students"] = len(g["students"])
+        return sorted(out.values(), key=lambda g: (-g["reports"], -g["last"]))
+
+    def resolve_gap(self, key: str) -> None:
+        """The owner dealt with it: forget the gap, so it alerts again if it ever comes back."""
+        with self._db() as conn:
+            conn.execute("DELETE FROM lf_gaps WHERE key = %s", (key,))
+            conn.execute("DELETE FROM lf_meta WHERE key = %s", (f"gap_alert:{key}",))
 
     def set_blocked(self, email: str, blocked: bool) -> None:
         with self._db() as conn:

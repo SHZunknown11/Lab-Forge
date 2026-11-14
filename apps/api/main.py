@@ -68,10 +68,11 @@ from fastapi.responses import (  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
-from core import mailer  # noqa: E402
+from core import gaps as gap_rules  # noqa: E402
+from core import mailer, notify  # noqa: E402
 from core.accounts import (  # noqa: E402
-    CODE_MINUTES, SESSION_DAYS, AccountError, Accounts, NoCredits, allowed_domains, flag_reason, free_period,
-    free_reports,
+    CODE_MINUTES, SESSION_DAYS, AccountError, Accounts, NoCredits, ad_rewards_per_day, allowed_domains, flag_reason,
+    free_period, free_reports, gap_alert_at,
 )
 from core.activity import ActivityLog, hash_ip, task_summary  # noqa: E402
 from core.ai.provider import AIError, DraftCache, ExplainCache, get_provider, usage_summary  # noqa: E402
@@ -210,6 +211,9 @@ def need_user(request: Request) -> dict | None:
 
 def _no_credits_message() -> str:
     when = "tomorrow" if free_period() == "day" else "next month"
+    if ad_rewards_per_day():
+        return (f"You've used your {free_reports()} free reports. Watch an ad for another one "
+                f"(at the top of this panel), or come back {when}.")
     return f"You've used your {free_reports()} free reports. More {when}."
 
 
@@ -217,7 +221,40 @@ def _me(user: dict | None) -> dict:
     if user is None:
         return {"user": None}
     return {"user": {"email": user["email"]}, "credits": accounts.credits(user["id"]),
-            "history_key": accounts.history_key(user["id"])}
+            "ads": accounts.ads(user["id"]), "history_key": accounts.history_key(user["id"])}
+
+
+def _signed_in(request: Request) -> dict:
+    user = current_user(request)
+    if user is None or user["blocked"]:
+        raise HTTPException(401, "Sign in first.")
+    return user
+
+
+class AdClaim(BaseModel):
+    ticket: str = Field(max_length=100)
+
+
+@app.post("/api/ads/ticket")
+def ad_ticket(request: Request):
+    """Before a rewarded ad starts. The ticket is claimed when the ad has been watched."""
+    user = _signed_in(request)
+    guard(request, "ads")
+    try:
+        return {"ticket": accounts.ad_ticket(user["id"]), **accounts.ads(user["id"])}
+    except AccountError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+
+
+@app.post("/api/ads/claim")
+def ad_claim(body: AdClaim, request: Request):
+    user = _signed_in(request)
+    guard(request, "ads")
+    try:
+        accounts.ad_claim(user["id"], body.ticket)
+    except AccountError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    return JSONResponse(_me(user), headers={"Cache-Control": "no-store"})
 
 
 def _is_https(request: Request) -> bool:
@@ -431,6 +468,7 @@ async def create_draft(
         if reason:
             _flag(job_id, job_id, "draft", reason, user, sheet=sheet, language=language, subject=subject,
                   title=full["title"], cached=log["cached"], error=log["error"], ip=hash_ip(ip), tasks=full["tasks"])
+            _gaps(job_id, full["tasks"], user, subject)
 
     jobs.start(job_id, job_dir, {"type": "job", "job": job_id, "details": details}, produce, finished)
     return _ndjson(jobs.stream(job_id, job_dir, -1, STREAM_PING_SECONDS))
@@ -442,6 +480,21 @@ def _flag(flag_id: str, job_id: str, kind: str, reason: str, user: dict | None, 
         accounts.flag(flag_id, job_id, kind, reason, data, user)
     except Exception as exc:  # noqa: BLE001
         print(f"[flags] {type(exc).__name__}: {exc}")
+
+
+def _gaps(job_id: str, tasks: list[dict], user: dict | None, subject: str = "") -> None:
+    """Count what LabForge couldn't do in this report, and tell the owner when a gap keeps coming up."""
+    try:
+        found = gap_rules.detect(tasks, LANGUAGE_LABELS)
+        if not found:
+            return
+        for gap in accounts.record_gaps(found, job_id, user, subject):
+            notify.notify_owner(
+                f"LabForge gap: {gap['label']}",
+                f"{gap['count']} report{'s have' if gap['count'] != 1 else ' has'} hit this: {gap['label']}.\n"
+                f"Latest subject: {subject or 'not given'}.\nSee the Gaps tab in /admin for the sheets and code.")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[gaps] {type(exc).__name__}: {exc}")
 
 
 @app.get("/api/jobs/{job_id}/events")
@@ -490,13 +543,14 @@ def run_one(job_id: str, body: RunRequest, request: Request):
     if not _is_owner(request):
         activity.record("run", job_id, index=index, ip=client_ip(request), title=task.title, status=task.status,
                         edited=edited, note=task.note[:300], output=task.output[-600:])
-        if task.status == "failed":
+        if task.status != "passed":  # failed, or something LabForge can't run: both are worth a look
             try:
                 sheet = (job_dir / "sheet.txt").read_text(encoding="utf-8")
             except OSError:
                 sheet = ""
             _flag(f"{job_id}:{index}", job_id, "run", flag_reason("", [task.model_dump()]), current_user(request),
                   sheet=sheet, ip=hash_ip(client_ip(request)), tasks=[{**task.model_dump(), "edited": edited}])
+            _gaps(job_id, [task.model_dump()], current_user(request))
     return task
 
 
@@ -710,6 +764,25 @@ def admin_flag_delete(flag_id: str, request: Request):
     return {"ok": True}
 
 
+@app.get("/api/admin/gaps")
+def admin_gaps(request: Request, days: int = 90):
+    """What LabForge couldn't do, grouped: languages, libraries, programs that need a window."""
+    _admin(request)
+    return {"days": days, "alert_at": gap_alert_at(), "notify": notify.backend() or "not set up",
+            "gaps": accounts.gaps(max(1, min(days, 365)))}
+
+
+class GapKey(BaseModel):
+    key: str = Field(max_length=160)
+
+
+@app.post("/api/admin/gaps/resolve")
+def admin_gap_resolve(body: GapKey, request: Request):
+    _admin(request)
+    accounts.resolve_gap(body.key)
+    return {"ok": True}
+
+
 @app.get("/api/admin/users")
 def admin_users(request: Request):
     _admin(request)
@@ -760,6 +833,8 @@ def admin_status(request: Request):
         "limiter": type(limiter).__name__,
         "login_required": login_required(),
         "mail": mailer.backend() or "not set up",
+        "owner_alerts": notify.backend() or "not set up",
+        "ad_rewards_per_day": ad_rewards_per_day(),
         "email_domains": allowed_domains(),
         "client_ip": client_ip(request),
         "ip_headers": {h: request.headers.get(h, "") for h in (

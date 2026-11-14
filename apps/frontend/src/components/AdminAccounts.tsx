@@ -55,11 +55,11 @@ async function ask<T>(token: string, url: string, init: RequestInit = {}): Promi
 
 const when = (ts: number) => new Date(ts * 1000).toLocaleString()
 
-export function Flags({ token }: { token: string }) {
+export function Flags({ token, initialQuery = "" }: { token: string; initialQuery?: string }) {
   const [rows, setRows] = useState<FlagRow[] | null>(null)
   const [keep, setKeep] = useState(30)
   const [open, setOpen] = useState<FlagDetail | null>(null)
-  const [query, setQuery] = useState("")
+  const [query, setQuery] = useState(initialQuery)
   const [error, setError] = useState("")
 
   const load = useCallback(() => {
@@ -96,7 +96,7 @@ export function Flags({ token }: { token: string }) {
   return (
     <>
       <div className="admin__bar">
-        <input type="search" placeholder="Search email, language, error" value={query} aria-label="Search"
+        <input type="search" placeholder="Search email, language, error, job" value={query} aria-label="Search"
           onChange={(e) => setQuery(e.target.value)} />
         <button className="btn btn--quiet" onClick={load}>Refresh</button>
       </div>
@@ -172,6 +172,96 @@ export function Flags({ token }: { token: string }) {
         ))}
       </ul>
       {rows && shown.length === 0 && <p className="hint admin__empty">Nothing here yet.</p>}
+    </>
+  )
+}
+
+interface GapRow {
+  key: string
+  kind: "language" | "library" | "service" | "window" | "runner"
+  label: string
+  reports: number
+  students: number
+  subjects: string[]
+  first: number
+  last: number
+  job: string
+}
+
+const GAP_KIND: Record<string, string> = {
+  language: "Language",
+  library: "Library",
+  service: "Server",
+  window: "Needs a window",
+  runner: "Runner",
+}
+
+/** What LabForge couldn't do for students, grouped, most reports first: the list of what to add next. */
+export function Gaps({ token, onOpen }: { token: string; onOpen: (job: string) => void }) {
+  const [rows, setRows] = useState<GapRow[] | null>(null)
+  const [info, setInfo] = useState({ alert_at: 3, notify: "" })
+  const [error, setError] = useState("")
+
+  const load = useCallback(() => {
+    setError("")
+    ask<{ gaps: GapRow[]; alert_at: number; notify: string }>(token, "/api/admin/gaps?days=180")
+      .then((d) => {
+        setRows(d.gaps)
+        setInfo({ alert_at: d.alert_at, notify: d.notify })
+      })
+      .catch((e: Error) => setError(e.message))
+  }, [token])
+  useEffect(load, [load])
+
+  const resolve = (g: GapRow) => {
+    if (!window.confirm(`Mark "${g.label}" as dealt with? Its count starts again from zero.`)) return
+    ask(token, "/api/admin/gaps/resolve", { method: "POST", body: JSON.stringify({ key: g.key }) })
+      .then(load)
+      .catch((e: Error) => setError(e.message))
+  }
+
+  return (
+    <>
+      <div className="admin__bar">
+        <button className="btn btn--quiet" onClick={load}>Refresh</button>
+      </div>
+      <p className="admin__stats">
+        <b>{rows?.length ?? 0}</b> things LabForge couldn't do.{" "}
+        {info.notify === "not set up"
+          ? "Alerts aren't set up (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, or LABFORGE_OWNER_EMAIL)."
+          : `You get one alert by ${info.notify} when ${info.alert_at} reports have hit the same gap.`}
+      </p>
+      {error && <p className="alert">{error}</p>}
+      <table className="admin__users">
+        <thead>
+          <tr>
+            <th>What was missing</th>
+            <th>Kind</th>
+            <th>Reports</th>
+            <th>Students</th>
+            <th>Subjects</th>
+            <th>Last seen</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {(rows ?? []).map((g) => (
+            <tr key={g.key}>
+              <td><b>{g.label}</b></td>
+              <td>{GAP_KIND[g.kind] ?? g.kind}</td>
+              <td className={g.reports >= info.alert_at ? "admin__bad" : ""}>{g.reports}</td>
+              <td>{g.students || "—"}</td>
+              <td>{g.subjects.join(", ") || "—"}</td>
+              <td>{when(g.last)}</td>
+              <td>
+                <button className="link" onClick={() => onOpen(g.job)}>Latest session</button>{" "}
+                <button className="link link--muted" onClick={() => resolve(g)}>Dealt with</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {rows && rows.length === 0 && <p className="hint admin__empty">Nothing missing so far.</p>}
     </>
   )
 }

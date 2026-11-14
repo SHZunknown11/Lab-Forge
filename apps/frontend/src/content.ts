@@ -39,7 +39,7 @@ export const FAQ: QA[] = [
   },
   {
     q: "Is LabForge free?",
-    a: "Yes. It's free and supported by ads. Sign in with your college email and you get a few free reports every day. A report that fails to be written doesn't count.",
+    a: "Yes. It's free and supported by ads. Sign in with your college email and you get a few free reports every day. A report that fails to be written doesn't count. When you run out, you can choose to watch an ad for another report, or wait until the next day.",
   },
   {
     q: "Does my report match my classmates'?",

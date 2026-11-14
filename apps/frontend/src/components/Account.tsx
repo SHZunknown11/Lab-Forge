@@ -1,5 +1,6 @@
 import { useState } from "react"
-import { requestCode, signOut, verifyCode } from "../api"
+import { adClaim, adTicket, requestCode, signOut, verifyCode } from "../api"
+import { rewardedConfigured, showRewardedAd } from "../rewarded"
 import type { Me, Meta } from "../types"
 
 /** "3 of 3 free reports left today", plus any extra credits. */
@@ -45,13 +46,42 @@ export function Account({ auth, me, onChange }: {
       setCode("")
     })
 
+  /** A ticket, the ad, then the claim. The report is added only when the ad was watched to the end. */
+  const watchAd = () =>
+    run(async () => {
+      const started = Date.now()
+      const offer = await adTicket()
+      const result = await showRewardedAd(offer.min_seconds)
+      if (result === "unavailable") throw new Error("No ad is available right now. Try again in a little while.")
+      if (result === "closed") throw new Error("The ad was closed before it finished, so no report was added.")
+      const early = offer.min_seconds * 1000 - (Date.now() - started)
+      if (early > 0) await new Promise((r) => setTimeout(r, early))
+      onChange(await adClaim(offer.ticket))
+    })
+
   if (me?.user) {
+    const ads = me.ads?.enabled && rewardedConfigured() ? me.ads : null
     return (
       <section className="account account--in" aria-label="Your account">
         <p className="account__who">
           Signed in as <b>{me.user.email}</b>
         </p>
         <p className="hint">{creditsLine(me)}.</p>
+        {ads && (
+          <div className="account__ad">
+            <button type="button" className="btn btn--secondary btn--wide" disabled={busy || ads.left <= 0}
+              onClick={() => void watchAd()}>
+              {busy
+                ? "One moment…"
+                : ads.left > 0
+                  ? `Watch an ad for ${ads.reward === 1 ? "1 more report" : `${ads.reward} more reports`}`
+                  : "No more ad reports today"}
+            </button>
+            <p className="hint">
+              {ads.left} of {ads.per_day} left today. The report is added when the ad ends.
+            </p>
+          </div>
+        )}
         <button type="button" className="link link--muted" disabled={busy}
           onClick={() => run(async () => {
             await signOut()

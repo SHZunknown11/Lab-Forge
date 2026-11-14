@@ -1718,3 +1718,38 @@ textarea.code {
   text-align: left;
   overflow-wrap: anywhere;
 }
+
+/* ── rewarded ad ───────────────────────────────────────────────── */
+.account__ad {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 2px;
+}
+
+.adbreak {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(20 24 30 / 0.72);
+}
+
+.adbreak__panel {
+  display: grid;
+  gap: 10px;
+  width: min(420px, 100%);
+  padding: 24px;
+  border-radius: 10px;
+  background: var(--paper);
+  text-align: center;
+}
+
+.adbreak__panel p {
+  margin: 0;
+}
+
+.adbreak__count {
+  font-weight: 700;
+}

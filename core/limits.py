@@ -126,4 +126,5 @@ def limits() -> dict[str, tuple[int, int, int]]:
         # Sign-in codes: a whole campus can share one IP address, so the IP allowance is wide.
         "codes": (6, 300, 3600),
         "verify": (20, 600, 3600),
+        "ads": (30, 900, 3600),
     }

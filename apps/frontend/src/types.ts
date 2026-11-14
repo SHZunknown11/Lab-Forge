@@ -66,9 +66,19 @@ export interface Credits {
 }
 
 /** The signed-in student. `history_key` locks the reports kept on this device. */
+export interface AdOffer {
+  enabled: boolean
+  left: number
+  per_day: number
+  reward: number
+  min_seconds: number
+}
+
 export interface Me {
   user: { email: string } | null
   credits?: Credits
+  /** Extra reports for watching an ad, when the owner has turned that on. */
+  ads?: AdOffer
   history_key?: string
 }
 

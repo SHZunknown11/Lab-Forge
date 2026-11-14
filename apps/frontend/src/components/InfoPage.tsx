@@ -3,7 +3,7 @@ import type { Route } from "../routes"
 import type { Meta } from "../types"
 
 const CONTACT = (import.meta.env.VITE_CONTACT_EMAIL as string | undefined)?.trim() || ""
-const UPDATED = "14 November 2026"
+const UPDATED = "15 November 2026"
 
 function Contact() {
   return CONTACT ? (
@@ -249,7 +249,8 @@ function Privacy({ meta }: { meta: Meta | null }) {
         To write reports you sign in with your college email address. We send it a 6-digit code; there is no password.
         For your account we keep: your email address, when you created the account and last signed in, a one-way code
         of the IP address you last signed in from, and a record of each report you wrote (the time, and whether it used
-        a free report or an extra one). We use this to give every student a fair share of free reports and to stop
+        a free report or an extra one, and each extra report you got by watching an ad). We use this to give every
+        student a fair share of free reports and to stop
         abuse. Signing in puts one cookie in your browser that keeps you signed in for 30 days. It isn't used for
         advertising.
       </p>
@@ -297,6 +298,10 @@ function Privacy({ meta }: { meta: Meta | null }) {
           person who runs LabForge. This copy stays for those {flagDays} days even if you delete the report.
         </li>
         <li>
+          <b>A count of what we couldn't do</b>, for example "MATLAB can't be run" or a library that isn't installed:
+          which report hit it, its subject and your account, kept for up to 180 days, so we know what to add next.
+        </li>
+        <li>
           <b>Usage counts</b> per browser id and per IP address, for one day, to enforce the daily limits and stop abuse.
         </li>
       </ul>
@@ -324,6 +329,10 @@ function Privacy({ meta }: { meta: Meta | null }) {
             Google uses data from sites that use its services
           </a>
           . Visitors from the EEA, the UK and Switzerland are asked for consent first.
+        </li>
+        <li>
+          <b>Google Ad Manager</b> shows the optional ad you can choose to watch for an extra report. It uses cookies
+          the same way. We record only that your account was given the report, not which ad you saw.
         </li>
         <li>
           <b>Analytics and error reports</b>, if enabled, count page visits without cookies and record technical details
@@ -384,10 +393,12 @@ function Terms() {
       <h2>Free reports and limits</h2>
       <p>
         Each account gets a number of free reports per day or per month; the number is shown when you sign in and may
-        change. A report that fails to be written doesn't count. We may later offer extra reports, for example in
-        return for watching an advertisement. Free and extra reports have no cash value, can't be transferred or
-        refunded, and unused free reports don't carry over. Trying to get around the limits, for example with several
-        accounts or automated requests, isn't allowed.
+        change. A report that fails to be written doesn't count. When it is offered, you can choose to watch an
+        advertisement for an extra report, a limited number of times a day; the report is added only when the ad has
+        played to the end, and we can't promise an ad will always be available. Watching ads is never required.
+        Free and extra reports have no cash value, can't be transferred or refunded, and unused free reports don't
+        carry over. Trying to get around the limits, for example with several accounts, automated requests or
+        claiming ad reports without watching the ad, isn't allowed and can get an account closed.
       </p>
       <h2>Your reports are kept on your device</h2>
       <p>

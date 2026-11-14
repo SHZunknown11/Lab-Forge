@@ -1,4 +1,4 @@
-import type { Draft, DraftEvent, Explanation, Me, Meta, RenderResult, Task } from "./types"
+import type { AdOffer, Draft, DraftEvent, Explanation, Me, Meta, RenderResult, Task } from "./types"
 
 export class ApiError extends Error {
   status: number
@@ -227,3 +227,8 @@ export async function fetchFile(job: string, name: string, render: string): Prom
   if (!res.ok) await fail(res)
   return res.blob()
 }
+
+/** Before a rewarded ad starts: a ticket to claim once it has been watched. */
+export const adTicket = () => json<AdOffer & { ticket: string }>(post("/api/ads/ticket"))
+
+export const adClaim = (ticket: string) => json<Me>(post("/api/ads/claim", { ticket }))

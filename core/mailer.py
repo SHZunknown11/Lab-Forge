@@ -43,6 +43,13 @@ def send_code(email: str, code: str, minutes: int) -> None:
     text = (f"Your LabForge sign-in code is {code}\n\n"
             f"It works for {minutes} minutes. If you didn't ask for it, ignore this email: "
             "nobody can sign in without the code.\n")
+    if backend() == "console":
+        print(f"[mail] sign-in code for {email}: {code}")
+        return
+    send(email, subject, text)
+
+
+def send(email: str, subject: str, text: str) -> None:
     kind = backend()
     try:
         if kind == "resend":
@@ -50,7 +57,7 @@ def send_code(email: str, code: str, minutes: int) -> None:
         elif kind == "smtp":
             _smtp(email, subject, text)
         elif kind == "console":
-            print(f"[mail] sign-in code for {email}: {code}")
+            print(f"[mail] to {email}: {subject}\n{text}")
         else:
             raise MailError("No mail backend is configured.")
     except MailError:
