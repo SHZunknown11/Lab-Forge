@@ -24,6 +24,7 @@ import base64
 import functools
 import http.server
 import os
+import random
 import re
 import shutil
 import socketserver
@@ -142,6 +143,37 @@ def find_chrome() -> str | None:
     return None
 
 
+def find_octave() -> str | None:
+    """GNU Octave, which runs most MATLAB lab scripts. EXEC_MATLAB=0 keeps MATLAB as "add a screenshot"."""
+    if os.environ.get("EXEC_MATLAB", "1").strip() == "0":
+        return None
+    env = os.environ.get("EXEC_OCTAVE")
+    if env and Path(env).exists():
+        return env
+    return shutil.which("octave-cli") or shutil.which("octave")
+
+
+MATLAB_SAMPLES = ROOT / ".runtime" / "matlab" / "images"
+_samples_lock = threading.Lock()
+# The sample pictures MATLAB ships (cameraman.tif and friends) aren't part of Octave. Stand-ins
+# with the same names come from scikit-image's own sample data, made once with the bundled Python.
+_SAMPLES_SCRIPT = """
+import sys, numpy as np
+from pathlib import Path
+from skimage import data, io, color, transform, util
+out = Path(sys.argv[1]); out.mkdir(parents=True, exist_ok=True)
+gray = lambda im: util.img_as_ubyte(color.rgb2gray(im)) if im.ndim == 3 else util.img_as_ubyte(im)
+small = lambda im: util.img_as_ubyte(transform.resize(im, (256, 256), anti_aliasing=True))
+pics = {"cameraman.tif": small(data.camera()), "coins.png": data.coins(), "moon.tif": data.moon(),
+        "peppers.png": small(data.astronaut()), "rice.png": small(gray(data.coins())),
+        "pout.tif": small(gray(data.astronaut())), "text.png": data.text(), "circuit.tif": small(data.brick()),
+        "lena.png": small(data.astronaut()), "football.jpg": small(data.coffee()), "image.png": small(data.astronaut()),
+        "image.jpg": small(data.astronaut()), "input.png": small(data.astronaut()), "input.jpg": small(data.astronaut())}
+for name, im in pics.items():
+    io.imsave(str(out / name), im, check_contrast=False)
+"""
+
+
 def _bundled_python() -> str | None:
     """The project's runtime venv (.runtime/python): numpy, matplotlib, OpenCV, scikit-image."""
     base = ROOT / ".runtime" / "python"
@@ -188,6 +220,7 @@ class CodeRunner:
                 "c": shutil.which("gcc") is not None,
                 "cpp": shutil.which("g++") is not None,
                 "shell": shutil.which("bash") is not None,
+                "matlab": find_octave() is not None,
             }
         caps["sql"] = caps.get("python", False)  # runs on SQLite through the bundled Python
         chrome = find_chrome() is not None
@@ -336,6 +369,43 @@ class CodeRunner:
                 "Add a screenshot of the output from your machine."))
         result = self._result(run)
         result.figures = sorted(str(p) for p in Path(wd / entry).parent.glob("figure_*.png"))
+        return result
+
+    def _matlab_samples(self) -> Path | None:
+        with _samples_lock:
+            if not MATLAB_SAMPLES.exists():
+                made = _run_process([self.python, "-c", _SAMPLES_SCRIPT, str(MATLAB_SAMPLES)], ROOT, "", scaled(90),
+                                    _clean_env(ROOT, {}))
+                if made.code != 0:
+                    print(f"[runner] MATLAB sample images weren't made: {made.output[-300:]}")
+                    MATLAB_SAMPLES.mkdir(parents=True, exist_ok=True)  # don't try again on every run
+        return MATLAB_SAMPLES
+
+    def _run_matlab(self, files: list[CodeFile], stdin: str, wd: Path) -> RunResult:
+        """MATLAB scripts run in GNU Octave with its image package; figures come back as pictures."""
+        octave = find_octave()
+        paths = self._write(files, wd)
+        scripts = [p for p in paths if p.endswith(".m")]
+        if not octave or not scripts:
+            return RunResult(status="not_run", note=(
+                "MATLAB programs can't be run here. Run it on your machine and add a screenshot of the output."))
+        entry = _pick(scripts, ("main.m",),
+                      lambda p: not re.match(r"\s*(%[^\n]*\n\s*)*function\b", (wd / p).read_text(encoding="utf-8")))
+        if not re.fullmatch(r"[A-Za-z0-9_./-]+", entry):
+            return RunResult(status="not_run", note="Rename the script: MATLAB file names use letters, digits and _.")
+        shutil.copy(HARNESS / "lf_octave.m", wd / "lf_octave.m")
+        for sample in self._matlab_samples().glob("*"):
+            if not (wd / sample.name).exists():
+                shutil.copy(sample, wd / sample.name)
+        run = self._exec([octave, "--no-gui", "--no-window-system", "--quiet", "--no-init-file", "--no-history",
+                          "--eval", f"lf_octave('{entry}')"], wd, stdin, "matlab", timeout=self.timeout + scaled(25))
+        unknown = re.search(r"'(\w+)' undefined", run.output)
+        if unknown and run.code != 0:
+            return RunResult(status="not_run", output=_clip(run.output), note=(
+                f"Uses {unknown.group(1)}, which Octave (the free MATLAB stand-in used here) doesn't have. "
+                "Run it in MATLAB and add a screenshot."))
+        result = self._result(run)
+        result.figures = sorted(str(p) for p in wd.glob("figure_*.png"))
         return result
 
     def _run_sql(self, files: list[CodeFile], stdin: str, wd: Path) -> RunResult:
@@ -517,8 +587,17 @@ class CodeRunner:
 
 # ── remote execution worker ───────────────────────────────────────
 
+def _workers() -> tuple[list[str], str]:
+    """EXEC_WORKER_URL can list several workers, comma-separated: each run picks one at random
+    and moves on to the next if it doesn't answer."""
+    urls = [u.strip().rstrip("/") for u in os.environ.get("EXEC_WORKER_URL", "").split(",") if u.strip()]
+    random.shuffle(urls)
+    return urls, os.environ.get("EXEC_WORKER_TOKEN", "")
+
+
 def _worker() -> tuple[str, str]:
-    return (os.environ.get("EXEC_WORKER_URL", "").rstrip("/"), os.environ.get("EXEC_WORKER_TOKEN", ""))
+    urls, token = _workers()
+    return (urls[0] if urls else "", token)
 
 
 _caps_cache: dict = {"at": 0.0, "caps": {}}
@@ -547,18 +626,22 @@ def _remote_caps() -> dict[str, bool]:
 
 
 def _run_remote(language: str, files: list[CodeFile], stdin: str, workdir: Path) -> RunResult:
-    url, token = _worker()
-    if not url:
+    urls, token = _workers()
+    if not urls:
         return RunResult(status="not_run", note="Programs can't be run right now. Add a screenshot of the output.")
-    try:
-        import httpx
+    import httpx
 
-        with RUN_SLOTS:  # don't flood the worker from one web instance
-            r = httpx.post(f"{url}/run", headers={"X-Worker-Token": token}, timeout=scaled(240),
-                           json={"language": language, "stdin": stdin,
-                                 "files": [{"name": f.name, "code": f.code} for f in files]})
-    except Exception as exc:  # noqa: BLE001
-        print(f"[runner] worker call failed: {type(exc).__name__}: {exc}")
+    r = None
+    for url in urls:  # a random worker first; the next one if it is down
+        try:
+            with RUN_SLOTS:  # don't flood the workers from one web instance
+                r = httpx.post(f"{url}/run", headers={"X-Worker-Token": token}, timeout=scaled(240),
+                               json={"language": language, "stdin": stdin,
+                                     "files": [{"name": f.name, "code": f.code} for f in files]})
+            break
+        except Exception as exc:  # noqa: BLE001
+            print(f"[runner] worker call failed: {type(exc).__name__}: {exc}")
+    if r is None:
         return RunResult(status="not_run", retryable=False,
                          note="The program runner is busy or offline. Try again in a minute, or add a screenshot.")
     if r.status_code != 200:

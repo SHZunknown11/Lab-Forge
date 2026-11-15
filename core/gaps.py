@@ -23,6 +23,7 @@ _MISSING = (
 _NEEDS_ONE = re.compile(r"Needs the (.+?) (?:library|package|module), which isn't installed here")
 _NEEDS_NPM = re.compile(r"Needs npm packages that aren't installed here \(([^)]*)\)")
 _NEEDS_SERVICE = re.compile(r"Needs an? (.+?) server, which isn't set up here")
+_NOT_IN_OCTAVE = re.compile(r"Uses (\w+), which Octave")
 
 
 def detect(tasks: list[dict], labels: dict[str, str] | None = None) -> list[dict]:
@@ -50,6 +51,9 @@ def detect(tasks: list[dict], labels: dict[str, str] | None = None) -> list[dict
         for lib in (m.strip() for m in missing[:6]):
             if lib:
                 add("library", f"library:{language}:{lib.lower()}", f"{name} library: {lib}")
+        octave = _NOT_IN_OCTAVE.search(note)
+        if octave:
+            add("library", f"library:matlab:{octave.group(1).lower()}", f"MATLAB function: {octave.group(1)}")
         service = _NEEDS_SERVICE.search(note)
         if service:
             add("service", f"service:{service.group(1).strip().lower()}", f"{service.group(1).strip()} server isn't set up")

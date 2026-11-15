@@ -127,4 +127,5 @@ def limits() -> dict[str, tuple[int, int, int]]:
         "codes": (6, 300, 3600),
         "verify": (20, 600, 3600),
         "ads": (30, 900, 3600),
+        "pay": (20, 300, 3600),
     }

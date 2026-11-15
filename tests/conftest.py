@@ -33,6 +33,11 @@ def isolated_storage(tmp_path, monkeypatch):
     monkeypatch.setenv("LABFORGE_FREE_PERIOD", "day")
     monkeypatch.setenv("LABFORGE_MAIL_BACKEND", "")
     monkeypatch.setenv("LABFORGE_AD_REWARDS_PER_DAY", "0")
+    for name in ("RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET", "RAZORPAY_WEBHOOK_SECRET", "LABFORGE_PACKS"):
+        monkeypatch.setenv(name, "")  # no payment ever leaves a test run
+    monkeypatch.setenv("LABFORGE_NOTE_EXTRA_COST", "1")
+    monkeypatch.setenv("LABFORGE_REFERRAL_REWARD", "2")
+    monkeypatch.setenv("LABFORGE_REFERRAL_WELCOME", "1")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")  # no alert ever leaves a test run
     monkeypatch.setenv("LABFORGE_OWNER_EMAIL", "")
     monkeypatch.setenv("RESEND_API_KEY", "")

@@ -39,11 +39,11 @@ export const FAQ: QA[] = [
   },
   {
     q: "Is LabForge free?",
-    a: "Yes. It's free and supported by ads. Sign in with your college email and you get a few free reports every day. A report that fails to be written doesn't count. When you run out, you can choose to watch an ad for another report, or wait until the next day.",
+    a: "Yes. It's free and supported by ads. Sign in with your college email and you get a few free reports every day. A report that fails to be written doesn't count. When you run out, you can watch an ad for another report, buy a pack, invite a classmate, or wait until the next day.",
   },
   {
     q: "Does my report match my classmates'?",
-    a: "If you upload the same sheet, you start from the same code. That's fine for learning, but your college's rules decide what you may submit. Read the code, understand it, and change it to make it your own where your teacher expects that.",
+    a: "If you upload the same sheet, you start from the same code. You can add a short note before writing (for example the approach you used in the lab, or your own test input) and the report is written for you instead. Either way, your college's rules decide what you may submit: read the code, understand it, and make it your own where your teacher expects that.",
   },
   {
     q: "Is this cheating?",

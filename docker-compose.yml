@@ -6,6 +6,11 @@ services:
         VITE_ADSENSE_CLIENT: ${VITE_ADSENSE_CLIENT:-}
         VITE_ADSENSE_SLOT_RAIL: ${VITE_ADSENSE_SLOT_RAIL:-}
         VITE_ADSENSE_SLOT_BENCH: ${VITE_ADSENSE_SLOT_BENCH:-}
+        VITE_ADSENSE_SLOT_WAIT: ${VITE_ADSENSE_SLOT_WAIT:-}
+        VITE_REWARDED_AD_UNIT: ${VITE_REWARDED_AD_UNIT:-}
+        VITE_CONTACT_EMAIL: ${VITE_CONTACT_EMAIL:-}
+        # MATLAB sheets through GNU Octave: WITH_OCTAVE=1 docker compose build
+        WITH_OCTAVE: ${WITH_OCTAVE:-0}
     env_file: .env
     environment:
       PDF_BACKEND: gotenberg
@@ -30,7 +35,10 @@ services:
   # then: docker compose --profile worker up -d
   worker:
     profiles: ["worker"]
-    build: .
+    build:
+      context: .
+      args:
+        WITH_OCTAVE: ${WITH_OCTAVE:-0}
     command: ["sh", "-c", "exec uvicorn apps.worker.main:app --host 0.0.0.0 --port 8100"]
     environment:
       EXEC_WORKER_TOKEN: ${EXEC_WORKER_TOKEN:-}
@@ -47,5 +55,24 @@ services:
     restart: unless-stopped
     # Not published: only LabForge talks to it.
 
+  # HTTPS on your own server (docs/deployment.md):
+  #   LABFORGE_DOMAIN=labforge.in docker compose --profile https up -d
+  caddy:
+    profiles: ["https"]
+    image: caddy:2
+    environment:
+      LABFORGE_DOMAIN: ${LABFORGE_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/vps/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+    depends_on: [labforge]
+
 volumes:
   labforge-data:
+  caddy-data:
+  caddy-config:

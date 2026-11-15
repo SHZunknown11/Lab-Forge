@@ -106,6 +106,72 @@ Telegram if `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set, otherwise by em
 `LABFORGE_OWNER_EMAIL`. A runner that is offline alerts the first time. "Dealt with" in the
 tab clears a gap, so it alerts again if it ever comes back.
 
+## Your own server (VPS)
+
+Render's free plan (a tenth of a CPU, asleep when idle) can't serve a class at deadline time.
+Any small Linux server with Docker can: 2 CPUs and 4 GB are enough to start.
+
+```bash
+git clone https://github.com/SHZunknown11/Lab-Forge && cd Lab-Forge
+cp .env.example .env            # AI keys, LABFORGE_DATABASE_URL, LABFORGE_SECRET, mail, ...
+WITH_OCTAVE=1 LABFORGE_DOMAIN=labforge.in docker compose --profile https --profile worker up -d --build
+```
+
+That starts the app, Gotenberg for PDFs, a worker for student programs and Caddy, which gets
+the HTTPS certificate for `LABFORGE_DOMAIN` by itself (point the domain's A record at the
+server and open ports 80 and 443 first). Set `EXEC_BACKEND=remote`,
+`EXEC_WORKER_URL=http://worker:8100` and `EXEC_WORKER_TOKEN` in `.env` so programs run in the
+worker, which holds no secrets.
+
+**More capacity.** Run the worker on more machines (same image, `EXEC_WORKER_TOKEN` set,
+port 8100 reachable only from the app) and list them all in `EXEC_WORKER_URL`, comma-separated.
+Each run goes to one of them, and to the next if it is down. `LABFORGE_MAX_ACTIVE_DRAFTS`
+caps how many reports are written at once; the rest wait in a queue the student can see.
+
+**Nothing to lose on a restart.** Accounts, credits and the cache are in Postgres; job folders
+are in the `labforge-data` volume and are deleted after a few hours anyway; finished reports
+live on the students' own devices. So there is no separate file store to run.
+
+**Uptime.** Point a free monitor (UptimeRobot, Better Stack) at `/api/health`. LabForge's own
+alerts (Telegram or email) cover gaps, the runner going offline, and a weekly summary.
+
+## MATLAB sheets (GNU Octave)
+
+Built with `WITH_OCTAVE=1`, the image has GNU Octave with its image, signal and statistics
+packages, and MATLAB tasks are run in it: printed output and every figure go into the report
+(`core/execution/harness/lf_octave.m`). MATLAB's sample pictures (`cameraman.tif`,
+`coins.png`, ...) aren't part of Octave, so stand-ins with the same names are put next to
+each script. A script that uses a function Octave doesn't have is marked for the student to
+run in MATLAB, and shows up under Gaps. `EXEC_MATLAB=0` turns this off.
+
+This runner was written without an Octave install to try it on. Build one image with
+`WITH_OCTAVE=1`, write an Image Processing sheet, and check the result before relying on it.
+
+## Paid packs (Razorpay)
+
+1. Create a Razorpay account and take the **test** key id and secret from the dashboard.
+2. Set `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` and `LABFORGE_PACKS` (rupees:reports, e.g.
+   `10:10,49:70`). A "Buy reports" box appears for signed-in students.
+3. In the dashboard add a webhook to `https://<your site>/api/pay/webhook` for the
+   `payment.captured` event, and put its secret in `RAZORPAY_WEBHOOK_SECRET`. It adds the
+   reports even if the student's page closed before the payment was confirmed.
+4. Pay for a pack with Razorpay's test UPI id, see the reports arrive, then switch to live keys.
+
+Razorpay asks for a contact address, terms, a privacy policy and a refund policy on the site
+before it turns live payments on: `/terms` and `/privacy` have them, and `VITE_CONTACT_EMAIL`
+must be set. Read the refund paragraph in the terms and change it if you want another policy.
+
+## Notes, invites and subjects
+
+- **Personal note.** A student can add a short note to a report ("use a while loop"). It is
+  written for them instead of coming from the shared cache, so it costs
+  `LABFORGE_NOTE_EXTRA_COST` extra reports (default 1).
+- **Invites.** Each student has a link. A classmate who signs up with it gets
+  `LABFORGE_REFERRAL_WELCOME` report at once; the inviter gets `LABFORGE_REFERRAL_REWARD` when
+  that classmate writes a first report, for up to `LABFORGE_REFERRAL_MAX` classmates.
+- **Subjects.** Subject names students type are counted. Approve them under **Subjects** in
+  `/admin` and they appear in everyone's subject list, with the code filled in.
+
 ## Running student code safely
 
 Uploaded sheets decide what code the model writes, so treat every program as

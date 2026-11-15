@@ -1,0 +1,13 @@
+# HTTPS in front of LabForge on your own server. Caddy gets and renews the certificate itself.
+#   LABFORGE_DOMAIN=labforge.in docker compose --profile https up -d
+# Point the domain's A record at the server first, and open ports 80 and 443.
+{$LABFORGE_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy labforge:8000 {
+		# Reports stream for a minute or two: don't buffer them, don't give up on them.
+		flush_interval -1
+		transport http {
+			read_timeout 10m
+		}
+	}
+}

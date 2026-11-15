@@ -4,6 +4,8 @@ const CLIENT = import.meta.env.VITE_ADSENSE_CLIENT as string | undefined
 const SLOTS: Record<string, string | undefined> = {
   rail: import.meta.env.VITE_ADSENSE_SLOT_RAIL as string | undefined,
   bench: import.meta.env.VITE_ADSENSE_SLOT_BENCH as string | undefined,
+  // Shown in the side panel while a report is being written (30 to 90 seconds).
+  wait: import.meta.env.VITE_ADSENSE_SLOT_WAIT as string | undefined,
 }
 
 declare global {
@@ -28,7 +30,7 @@ function ensureScript() {
  * placement at build time. Without them nothing renders in production; in
  * development a labelled outline shows where the unit will sit.
  */
-export function AdSlot({ placement }: { placement: "rail" | "bench" }) {
+export function AdSlot({ placement }: { placement: "rail" | "bench" | "wait" }) {
   const ref = useRef<HTMLModElement>(null)
   const slot = SLOTS[placement]
 

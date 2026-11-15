@@ -96,7 +96,7 @@ def test_an_ad_buys_one_more_report(app):
                                                    "min_seconds": 0}
     assert write(client)[0].status_code == 200  # the one free report
     res, _ = write(client)
-    assert res.status_code == 402 and "Watch an ad" in res.json()["detail"]
+    assert res.status_code == 402 and "watch an ad" in res.json()["detail"]
 
     me = watch_ad(client)
     assert me.status_code == 200

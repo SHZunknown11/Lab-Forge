@@ -1753,3 +1753,19 @@ textarea.code {
 .adbreak__count {
   font-weight: 700;
 }
+
+/* ── more reports: packs and invites ───────────────────────────── */
+.account--more {
+  gap: 12px;
+}
+
+.account__block {
+  display: grid;
+  gap: 6px;
+}
+
+.packs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

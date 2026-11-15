@@ -16,6 +16,11 @@ Everything lives in Postgres when LABFORGE_DATABASE_URL is set, otherwise in a S
   tells us the ad was watched and we can't check that, so the daily cap is the real limit.
 - Gaps (core/gaps.py): one row per report that hit something LabForge can't do, counted per gap
   for /admin, with one alert to the owner when LABFORGE_GAP_ALERT_AT reports have hit it.
+- Paid packs (core/payments.py): LABFORGE_PACKS lists them as price:reports. An order is
+  recorded when it is created and pays out once, when Razorpay's signature has been checked.
+- Subjects: names students type are counted; the owner approves the ones everyone may pick.
+- Referrals: a new student who signs up with someone's link gets a welcome report at once, and
+  the referrer gets theirs when the new student's first report is written.
 """
 from __future__ import annotations
 
@@ -70,6 +75,14 @@ SCHEMA = (
     "label TEXT NOT NULL, ts DOUBLE PRECISION NOT NULL, user_id TEXT NOT NULL DEFAULT '', job TEXT NOT NULL, "
     "subject TEXT NOT NULL DEFAULT '', uniq TEXT UNIQUE)",
     "CREATE INDEX IF NOT EXISTS lf_gaps_key ON lf_gaps (key, ts)",
+    "CREATE TABLE IF NOT EXISTS lf_orders (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, pack TEXT NOT NULL, "
+    "amount INTEGER NOT NULL, reports INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'created', "
+    "payment_id TEXT NOT NULL DEFAULT '', ts DOUBLE PRECISION NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS lf_subjects (key TEXT PRIMARY KEY, name TEXT NOT NULL, code TEXT NOT NULL DEFAULT '', "
+    "status TEXT NOT NULL DEFAULT 'pending', uses INTEGER NOT NULL DEFAULT 1, ts DOUBLE PRECISION NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS lf_referrals (user_id TEXT PRIMARY KEY, referrer_id TEXT NOT NULL, "
+    "ts DOUBLE PRECISION NOT NULL, rewarded INTEGER NOT NULL DEFAULT 0)",
+    "CREATE INDEX IF NOT EXISTS lf_referrals_referrer ON lf_referrals (referrer_id)",
 )
 
 
@@ -115,6 +128,40 @@ def ad_reward() -> int:
 
 def ad_min_seconds() -> int:
     return max(0, _env_int("LABFORGE_AD_MIN_SECONDS", 15))
+
+
+def note_extra_cost() -> int:
+    """Extra reports a personal note costs: it can't come from the shared cache, so it is a real AI call."""
+    return max(0, _env_int("LABFORGE_NOTE_EXTRA_COST", 1))
+
+
+def packs() -> list[dict]:
+    """LABFORGE_PACKS="10:10,25:30,49:70": rupees:reports."""
+    out = []
+    for part in os.environ.get("LABFORGE_PACKS", "").split(","):
+        try:
+            price, reports = (int(x) for x in part.strip().split(":"))
+        except ValueError:
+            continue
+        if 1 <= price <= 5000 and 1 <= reports <= 1000:
+            out.append({"id": f"p{price}", "price": price, "reports": reports})
+    return out
+
+
+def referral_reward() -> int:
+    return max(0, _env_int("LABFORGE_REFERRAL_REWARD", 2))
+
+
+def referral_welcome() -> int:
+    return max(0, _env_int("LABFORGE_REFERRAL_WELCOME", 1))
+
+
+def referral_max() -> int:
+    return max(0, _env_int("LABFORGE_REFERRAL_MAX", 20))
+
+
+def subject_key(name: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9+#&]+", " ", (name or "").lower()).split())[:120]
 
 
 def gap_alert_at() -> int:
@@ -265,6 +312,7 @@ class Accounts:
                 "ON CONFLICT (email) DO UPDATE SET last_login = excluded.last_login, last_ip = excluded.last_ip",
                 (uuid.uuid4().hex, email, now, now, ip))
             user = self._user(conn, "email = %s", email)
+            user["new"] = abs(user["created"] - now) < 0.001
             if user["blocked"]:
                 raise AccountError("This account has been blocked. Contact us if that's a mistake.", 403)
             token = secrets.token_urlsafe(32)
@@ -318,29 +366,34 @@ class Accounts:
         with self._db() as conn:
             return self._balance(conn, user_id)
 
-    def spend(self, user_id: str, job: str) -> str:
-        """One report: a free one while this period has any left, then an extra credit."""
+    def spend(self, user_id: str, job: str, amount: int = 1) -> str:
+        """Pay for one report: free ones while this period has any left, then extra credits.
+        `amount` is more than 1 for a report with a personal note."""
         with self._lock, self._db() as conn:
             balance = self._balance(conn, user_id)
-            if balance["left"] <= 0:
+            if balance["left"] < amount:
                 raise NoCredits()
-            kind = "free" if balance["free"] > 0 else "extra"
-            conn.execute(
-                "INSERT INTO lf_credits (id, user_id, delta, kind, period, reason, job, ts, uniq) "
-                "VALUES (%s, %s, -1, %s, %s, 'report', %s, %s, %s) ON CONFLICT (uniq) DO NOTHING",
-                (uuid.uuid4().hex, user_id, kind, _period_key(), job, time.time(), f"spend:{job}"))
+            free, kind = balance["free"], "free"
+            for n in range(max(1, amount)):
+                kind = "free" if free > 0 else "extra"
+                free -= 1
+                conn.execute(
+                    "INSERT INTO lf_credits (id, user_id, delta, kind, period, reason, job, ts, uniq) "
+                    "VALUES (%s, %s, -1, %s, %s, 'report', %s, %s, %s) ON CONFLICT (uniq) DO NOTHING",
+                    (uuid.uuid4().hex, user_id, kind, _period_key(), job, time.time(),
+                     f"spend:{job}" if n == 0 else f"spend:{job}:{n}"))
             return kind
 
     def refund(self, user_id: str, job: str) -> None:
-        """The report didn't get written: give the credit back (once)."""
+        """The report didn't get written: give back everything it cost (once)."""
         with self._lock, self._db() as conn:
-            row = conn.execute("SELECT kind, period FROM lf_credits WHERE uniq = %s AND user_id = %s",
-                               (f"spend:{job}", user_id)).fetchone()
-            if row:
+            rows = conn.execute("SELECT kind, period, uniq FROM lf_credits WHERE user_id = %s AND job = %s "
+                                "AND reason = 'report'", (user_id, job)).fetchall()
+            for kind, period, uniq in rows:
                 conn.execute(
                     "INSERT INTO lf_credits (id, user_id, delta, kind, period, reason, job, ts, uniq) "
                     "VALUES (%s, %s, 1, %s, %s, 'refund', %s, %s, %s) ON CONFLICT (uniq) DO NOTHING",
-                    (uuid.uuid4().hex, user_id, row[0], row[1], job, time.time(), f"refund:{job}"))
+                    (uuid.uuid4().hex, user_id, kind, period, job, time.time(), "refund:" + uniq[len("spend:"):]))
 
     def grant(self, email: str, amount: int, reason: str = "grant") -> dict:
         """Extra credits (they don't expire). A negative amount takes them back."""
@@ -452,6 +505,160 @@ class Accounts:
             conn.execute("DELETE FROM lf_gaps WHERE key = %s", (key,))
             conn.execute("DELETE FROM lf_meta WHERE key = %s", (f"gap_alert:{key}",))
 
+    # ── paid packs ─────────────────────────────────────────────────
+    def add_order(self, order_id: str, user_id: str, pack: dict) -> None:
+        with self._db() as conn:
+            conn.execute("INSERT INTO lf_orders (id, user_id, pack, amount, reports, ts) VALUES (%s, %s, %s, %s, %s, %s) "
+                         "ON CONFLICT (id) DO NOTHING",
+                         (order_id, user_id, pack["id"], pack["price"] * 100, pack["reports"], time.time()))
+
+    def order_owner(self, order_id: str) -> str:
+        with self._db() as conn:
+            row = conn.execute("SELECT user_id FROM lf_orders WHERE id = %s", ((order_id or "")[:60],)).fetchone()
+        return row[0] if row else ""
+
+    def complete_order(self, order_id: str, payment_id: str) -> bool:
+        """The payment is confirmed: add the pack's reports. Safe to call twice (page and webhook)."""
+        with self._lock, self._db() as conn:
+            row = conn.execute("SELECT user_id, reports, status FROM lf_orders WHERE id = %s", (order_id,)).fetchone()
+            if not row:
+                return False
+            conn.execute("UPDATE lf_orders SET status = 'paid', payment_id = %s WHERE id = %s",
+                         ((payment_id or "")[:60], order_id))
+            conn.execute(
+                "INSERT INTO lf_credits (id, user_id, delta, kind, period, reason, ts, uniq) "
+                "VALUES (%s, %s, %s, 'extra', '', 'purchase', %s, %s) ON CONFLICT (uniq) DO NOTHING",
+                (uuid.uuid4().hex, row[0], int(row[1]), time.time(), f"pay:{order_id}"))
+            return True
+
+    # ── subjects ───────────────────────────────────────────────────
+    def note_subject(self, name: str, code: str = "") -> None:
+        """A student wrote a report for this subject: count it, waiting for the owner's approval."""
+        name, code, key = " ".join((name or "").split())[:120], " ".join((code or "").split())[:30], subject_key(name)
+        if len(key) < 3:
+            return
+        with self._db() as conn:
+            conn.execute(
+                "INSERT INTO lf_subjects (key, name, code, ts) VALUES (%s, %s, %s, %s) ON CONFLICT (key) DO UPDATE SET "
+                "uses = lf_subjects.uses + 1, ts = excluded.ts, "
+                "code = CASE WHEN lf_subjects.code = '' THEN excluded.code ELSE lf_subjects.code END",
+                (key, name, code, time.time()))
+
+    def subjects(self, status: str = "") -> list[dict]:
+        with self._db() as conn:
+            if status:
+                rows = conn.execute("SELECT key, name, code, status, uses, ts FROM lf_subjects WHERE status = %s "
+                                    "ORDER BY uses DESC, name LIMIT 500", (status,)).fetchall()
+            else:
+                rows = conn.execute("SELECT key, name, code, status, uses, ts FROM lf_subjects "
+                                    "ORDER BY uses DESC, name LIMIT 1000").fetchall()
+        return [{"key": r[0], "name": r[1], "code": r[2], "status": r[3], "uses": int(r[4]), "ts": float(r[5])}
+                for r in rows]
+
+    def set_subject(self, key: str, status: str = "", name: str = "", code: str | None = None) -> None:
+        with self._db() as conn:
+            if status in ("approved", "pending", "hidden"):
+                conn.execute("UPDATE lf_subjects SET status = %s WHERE key = %s", (status, key))
+            if name.strip():
+                conn.execute("UPDATE lf_subjects SET name = %s WHERE key = %s", (" ".join(name.split())[:120], key))
+            if code is not None:
+                conn.execute("UPDATE lf_subjects SET code = %s WHERE key = %s", (" ".join(code.split())[:30], key))
+
+    # ── referrals ──────────────────────────────────────────────────
+    @staticmethod
+    def referral_code(user_id: str) -> str:
+        return user_id[:10]
+
+    def add_referral(self, new_user_id: str, code: str) -> bool:
+        """A brand-new account came through someone's link. The welcome report is added now."""
+        code = (code or "").strip().lower()
+        if not referral_reward() or not re.fullmatch(r"[a-f0-9]{10}", code):
+            return False
+        now = time.time()
+        with self._lock, self._db() as conn:
+            row = conn.execute("SELECT id FROM lf_users WHERE id LIKE %s", (code + "%",)).fetchone()
+            if not row or row[0] == new_user_id:
+                return False
+            conn.execute("INSERT INTO lf_referrals (user_id, referrer_id, ts) VALUES (%s, %s, %s) "
+                         "ON CONFLICT (user_id) DO NOTHING", (new_user_id, row[0], now))
+            if referral_welcome():
+                conn.execute(
+                    "INSERT INTO lf_credits (id, user_id, delta, kind, period, reason, ts, uniq) "
+                    "VALUES (%s, %s, %s, 'extra', '', 'welcome', %s, %s) ON CONFLICT (uniq) DO NOTHING",
+                    (uuid.uuid4().hex, new_user_id, referral_welcome(), now, f"welcome:{new_user_id}"))
+        return True
+
+    def reward_referral(self, new_user_id: str) -> bool:
+        """The referred student wrote their first report: the referrer gets theirs (once, up to a cap)."""
+        if not referral_reward():
+            return False
+        with self._lock, self._db() as conn:
+            row = conn.execute("SELECT referrer_id FROM lf_referrals WHERE user_id = %s AND rewarded = 0",
+                               (new_user_id,)).fetchone()
+            if not row:
+                return False
+            done = conn.execute("SELECT COUNT(*) FROM lf_referrals WHERE referrer_id = %s AND rewarded = 1",
+                                (row[0],)).fetchone()[0]
+            conn.execute("UPDATE lf_referrals SET rewarded = %s WHERE user_id = %s",
+                         (1 if int(done) < referral_max() else 2, new_user_id))  # 2: counted, but past the cap
+            if int(done) >= referral_max():
+                return False
+            conn.execute(
+                "INSERT INTO lf_credits (id, user_id, delta, kind, period, reason, ts, uniq) "
+                "VALUES (%s, %s, %s, 'extra', '', 'referral', %s, %s) ON CONFLICT (uniq) DO NOTHING",
+                (uuid.uuid4().hex, row[0], referral_reward(), time.time(), f"ref:{new_user_id}"))
+            return True
+
+    def referral(self, user_id: str) -> dict:
+        if not referral_reward():
+            return {"enabled": False, "code": "", "reward": 0, "welcome": 0, "joined": 0, "waiting": 0}
+        with self._db() as conn:
+            rows = conn.execute("SELECT rewarded, COUNT(*) FROM lf_referrals WHERE referrer_id = %s GROUP BY rewarded",
+                                (user_id,)).fetchall()
+        counts = {int(r[0]): int(r[1]) for r in rows}
+        return {"enabled": True, "code": self.referral_code(user_id), "reward": referral_reward(),
+                "welcome": referral_welcome(), "joined": counts.get(1, 0) + counts.get(2, 0),
+                "waiting": counts.get(0, 0)}
+
+    # ── the owner's summary ────────────────────────────────────────
+    def summary(self, days: int = 7) -> dict:
+        since = time.time() - days * 86400
+        with self._db() as conn:
+            def one(sql: str, *params):
+                return conn.execute(sql, params).fetchone()[0] or 0
+
+            written = one("SELECT COUNT(DISTINCT job) FROM lf_credits WHERE reason = 'report' AND ts >= %s", since)
+            refunded = one("SELECT COUNT(DISTINCT job) FROM lf_credits WHERE reason = 'refund' AND ts >= %s", since)
+            out = {
+                "days": days,
+                "accounts": int(one("SELECT COUNT(*) FROM lf_users")),
+                "new_accounts": int(one("SELECT COUNT(*) FROM lf_users WHERE created >= %s", since)),
+                "active_accounts": int(one("SELECT COUNT(DISTINCT user_id) FROM lf_credits WHERE reason = 'report' "
+                                           "AND ts >= %s", since)),
+                "reports": int(written) - int(refunded),
+                "ad_reports": int(one("SELECT COALESCE(SUM(delta), 0) FROM lf_credits WHERE reason = 'ad' AND ts >= %s",
+                                      since)),
+                "referrals": int(one("SELECT COUNT(*) FROM lf_referrals WHERE ts >= %s", since)),
+                "orders": int(one("SELECT COUNT(*) FROM lf_orders WHERE status = 'paid' AND ts >= %s", since)),
+                "revenue": int(one("SELECT COALESCE(SUM(amount), 0) FROM lf_orders WHERE status = 'paid' AND ts >= %s",
+                                   since)) / 100,
+                "failed_sessions": int(one("SELECT COUNT(*) FROM lf_flags WHERE ts >= %s", since)),
+                "subjects_waiting": int(one("SELECT COUNT(*) FROM lf_subjects WHERE status = 'pending'")),
+            }
+        out["gaps"] = [{"label": g["label"], "reports": g["reports"]} for g in self.gaps(days)[:5]]
+        return out
+
+    def digest_due(self, every_days: int = 7) -> bool:
+        """True once a week (the first time only starts the clock)."""
+        now = time.time()
+        with self._lock, self._db() as conn:
+            row = conn.execute("SELECT value FROM lf_meta WHERE key = 'digest_at'").fetchone()
+            due = bool(row) and now - float(row[0]) >= every_days * 86400
+            if not row or due:
+                conn.execute("INSERT INTO lf_meta (key, value) VALUES ('digest_at', %s) "
+                             "ON CONFLICT (key) DO UPDATE SET value = excluded.value", (str(now),))
+        return due
+
     def set_blocked(self, email: str, blocked: bool) -> None:
         with self._db() as conn:
             user = self._user(conn, "email = %s", (email or "").strip().lower())
@@ -465,8 +672,8 @@ class Accounts:
         with self._db() as conn:
             rows = conn.execute(
                 "SELECT u.id, u.email, u.created, u.last_login, u.last_ip, u.blocked, "
-                "(SELECT COUNT(*) FROM lf_credits c WHERE c.user_id = u.id AND c.reason = 'report') - "
-                "(SELECT COUNT(*) FROM lf_credits c WHERE c.user_id = u.id AND c.reason = 'refund') "
+                "(SELECT COUNT(DISTINCT c.job) FROM lf_credits c WHERE c.user_id = u.id AND c.reason = 'report') - "
+                "(SELECT COUNT(DISTINCT c.job) FROM lf_credits c WHERE c.user_id = u.id AND c.reason = 'refund') "
                 "FROM lf_users u ORDER BY u.last_login DESC LIMIT %s", (max(1, min(limit, 5000)),)).fetchall()
             return [{"email": r[1], "created": float(r[2]), "last_login": float(r[3]), "ip": r[4],
                      "blocked": bool(r[5]), "reports": int(r[6]), "credits": self._balance(conn, r[0])}

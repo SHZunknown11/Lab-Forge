@@ -217,7 +217,8 @@ export const getMe = () => json<Me>(call("/api/me"))
 
 export const requestCode = (email: string) => json<{ ok: boolean; minutes: number }>(post("/api/auth/code", { email }))
 
-export const verifyCode = (email: string, code: string) => json<Me>(post("/api/auth/verify", { email, code }))
+export const verifyCode = (email: string, code: string, ref = "") =>
+  json<Me>(post("/api/auth/verify", { email, code, ref }))
 
 export const signOut = () => json<{ ok: boolean }>(post("/api/auth/logout"))
 
@@ -232,3 +233,20 @@ export async function fetchFile(job: string, name: string, render: string): Prom
 export const adTicket = () => json<AdOffer & { ticket: string }>(post("/api/ads/ticket"))
 
 export const adClaim = (ticket: string) => json<Me>(post("/api/ads/claim", { ticket }))
+
+export interface PackOrder {
+  order_id: string
+  amount: number
+  currency: string
+  key_id: string
+  reports: number
+}
+
+export const payOrder = (pack: string) => json<PackOrder>(post("/api/pay/order", { pack }))
+
+export const payVerify = (proof: { order_id: string; payment_id: string; signature: string }) =>
+  json<Me>(post("/api/pay/verify", proof))
+
+/** Subjects everyone may pick: built in, plus the ones the owner approved. */
+export const getSubjects = () =>
+  json<{ subjects: { name: string; code: string }[] }>(call("/api/subjects")).then((d) => d.subjects)

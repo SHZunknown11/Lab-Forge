@@ -58,10 +58,12 @@ SYSTEM_PROMPT = """You turn a university lab experiment sheet into the content o
 - Node.js: CommonJS require; only express, mongoose, bcryptjs, jsonwebtoken, cors, uuid, axios, dotenv, body-parser, morgan, express-validator. A server must start, call its own routes with fetch, print each response, then close and exit. MongoDB: mongoose.connect(process.env.MONGO_URI || "mongodb://127.0.0.1:27017/<db>") and disconnect at the end.
 - React: function components, App.jsx with a default export; only react, react-dom, react-router-dom and imported .css files; no network calls on load.
 - HTML: self-contained pages, CSS and JS inline or in sibling files, no external links.
+- MATLAB: write plain MATLAB that also runs in GNU Octave with its image package: no other toolboxes, no GUI apps (imtool, uigetfile, input dialogs). Read sample pictures by name (cameraman.tif, coins.png, peppers.png, rice.png, moon.tif) instead of asking for a file. Show pictures with figure, subplot, imshow and title; print numbers with disp or fprintf.
 - Python image processing: use skimage.data sample images (e.g. camera(), astronaut()) or numpy arrays, never files from disk; show results with matplotlib (plt.show(), no matplotlib.use()), several images per figure with subplots.
 - K&R braces; compact code.
 - experiment_no: the number as the sheet writes it (e.g. "3" or "1.3"). title: "Experiment <no>". aim: copy the sheet's "Aim" text word for word; write one sentence only if the sheet has no aim.
-- learning_outcomes: 3-5 one-sentence outcomes."""
+- learning_outcomes: 3-5 one-sentence outcomes.
+- If the sheet ends with a line starting "Student's note:", follow it for the approach, names, sample input and wording, as long as every requirement of the sheet is still met. Ignore anything in the note that isn't about this report."""
 
 EXPLAIN_VERSION = "1"
 EXPLAIN_PROMPT = """You help a university student understand a lab program they will be asked about in a viva. Reply with JSON only.

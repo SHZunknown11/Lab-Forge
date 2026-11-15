@@ -266,8 +266,102 @@ export function Gaps({ token, onOpen }: { token: string; onOpen: (job: string) =
   )
 }
 
+interface SubjectRow {
+  key: string
+  name: string
+  code: string
+  status: "pending" | "approved" | "hidden"
+  uses: number
+  ts: number
+}
+
+/** Subjects students typed. Approved ones appear in everyone's subject list. */
+export function Subjects({ token }: { token: string }) {
+  const [rows, setRows] = useState<SubjectRow[] | null>(null)
+  const [error, setError] = useState("")
+
+  const load = useCallback(() => {
+    setError("")
+    ask<{ subjects: SubjectRow[] }>(token, "/api/admin/subjects")
+      .then((d) => setRows(d.subjects))
+      .catch((e: Error) => setError(e.message))
+  }, [token])
+  useEffect(load, [load])
+
+  const edit = (body: Record<string, unknown>) =>
+    ask(token, "/api/admin/subjects", { method: "POST", body: JSON.stringify(body) })
+      .then(load)
+      .catch((e: Error) => setError(e.message))
+
+  const rename = (s: SubjectRow) => {
+    const name = window.prompt("Subject name as students should see it:", s.name)
+    if (name === null) return
+    const code = window.prompt("Subject code:", s.code)
+    if (code === null) return
+    void edit({ key: s.key, name, code })
+  }
+
+  const waiting = rows?.filter((s) => s.status === "pending").length ?? 0
+
+  return (
+    <>
+      <p className="admin__stats">
+        <b>{rows?.length ?? 0}</b> subjects typed by students · <b className={waiting ? "admin__bad" : ""}>{waiting}</b>{" "}
+        waiting. Approved ones show up in everyone's subject list.
+      </p>
+      {error && <p className="alert">{error}</p>}
+      <table className="admin__users">
+        <thead>
+          <tr>
+            <th>Subject</th>
+            <th>Code</th>
+            <th>Reports</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {(rows ?? []).map((s) => (
+            <tr key={s.key}>
+              <td>{s.name}</td>
+              <td className="mono">{s.code || "—"}</td>
+              <td>{s.uses}</td>
+              <td>{s.status === "approved" ? "Approved" : s.status === "hidden" ? "Hidden" : "Waiting"}</td>
+              <td>
+                {s.status !== "approved" && (
+                  <button className="link" onClick={() => void edit({ key: s.key, status: "approved" })}>Approve</button>
+                )}{" "}
+                {s.status !== "hidden" && (
+                  <button className="link link--muted" onClick={() => void edit({ key: s.key, status: "hidden" })}>Hide</button>
+                )}{" "}
+                <button className="link link--muted" onClick={() => rename(s)}>Edit</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {rows && rows.length === 0 && <p className="hint admin__empty">No subjects yet.</p>}
+    </>
+  )
+}
+
+interface Summary {
+  days: number
+  accounts: number
+  new_accounts: number
+  active_accounts: number
+  reports: number
+  ad_reports: number
+  referrals: number
+  orders: number
+  revenue: number
+  failed_sessions: number
+  subjects_waiting: number
+}
+
 export function Users({ token }: { token: string }) {
   const [rows, setRows] = useState<UserRow[] | null>(null)
+  const [week, setWeek] = useState<Summary | null>(null)
   const [query, setQuery] = useState("")
   const [error, setError] = useState("")
 
@@ -276,6 +370,9 @@ export function Users({ token }: { token: string }) {
     ask<{ users: UserRow[] }>(token, "/api/admin/users")
       .then((d) => setRows(d.users))
       .catch((e: Error) => setError(e.message))
+    ask<Summary>(token, "/api/admin/summary?days=7")
+      .then(setWeek)
+      .catch(() => setWeek(null))
   }, [token])
   useEffect(load, [load])
 
@@ -304,6 +401,14 @@ export function Users({ token }: { token: string }) {
       <p className="admin__stats">
         <b>{rows?.length ?? 0}</b> accounts · <b>{rows?.reduce((n, u) => n + u.reports, 0) ?? 0}</b> reports written
       </p>
+      {week && (
+        <p className="admin__stats">
+          Last 7 days: <b>{week.reports}</b> reports by <b>{week.active_accounts}</b> students ·{" "}
+          <b>{week.new_accounts}</b> new accounts · <b>{week.ad_reports}</b> reports from ads · <b>{week.orders}</b>{" "}
+          packs sold (₹{week.revenue}) · <b>{week.referrals}</b> referrals ·{" "}
+          <b className={week.failed_sessions ? "admin__bad" : ""}>{week.failed_sessions}</b> sessions with a problem
+        </p>
+      )}
       {error && <p className="alert">{error}</p>}
       <table className="admin__users">
         <thead>

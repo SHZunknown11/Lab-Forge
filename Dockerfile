@@ -12,6 +12,9 @@ COPY apps/frontend/ ./
 ARG VITE_ADSENSE_CLIENT=""
 ARG VITE_ADSENSE_SLOT_RAIL=""
 ARG VITE_ADSENSE_SLOT_BENCH=""
+ARG VITE_ADSENSE_SLOT_WAIT=""
+# A rewarded ad unit from Google Ad Manager, for "watch an ad for another report".
+ARG VITE_REWARDED_AD_UNIT=""
 # Shown on the privacy and terms pages; set it before applying for AdSense.
 ARG VITE_CONTACT_EMAIL=""
 # Optional: browser error reports (Sentry) and cookieless page counts (Cloudflare Web Analytics).
@@ -38,6 +41,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/*
+
+# MATLAB sheets run in GNU Octave with its image package (about 600 MB more).
+#   docker build --build-arg WITH_OCTAVE=1 -t labforge .
+ARG WITH_OCTAVE=0
+RUN if [ "$WITH_OCTAVE" = "1" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends \
+            octave octave-image octave-signal octave-statistics gnuplot-nox \
+        && rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/*; \
+    fi
 
 WORKDIR /app
 COPY pyproject.toml README.md main.py ./

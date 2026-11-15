@@ -48,6 +48,15 @@ services:
         value: "0"
       - key: VITE_REWARDED_AD_UNIT
         sync: false
+      # Paid packs (Razorpay): rupees:reports, e.g. "10:10,49:70". Off until the keys are set.
+      - key: LABFORGE_PACKS
+        sync: false
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
       # Alerts when several students hit something LabForge can't do (docs/deployment.md).
       - key: TELEGRAM_BOT_TOKEN
         sync: false

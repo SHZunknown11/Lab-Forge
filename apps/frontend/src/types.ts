@@ -52,6 +52,10 @@ export interface Meta {
   ai_ready: boolean
   limits: { daily: number; remaining: number }
   auth: { required: boolean; domains: string[]; free: number; period: "day" | "month"; flag_days: number }
+  /** Packs of reports on sale (Razorpay), when the owner has set that up. */
+  pay: { enabled: boolean; key_id: string; packs: { id: string; price: number; reports: number }[] }
+  /** A personal note for a report: how long it may be and how many extra reports it uses. */
+  note: { max: number; extra_cost: number }
   job_ttl_hours: number
   log_days: number
   log_personal: boolean
@@ -79,6 +83,7 @@ export interface Me {
   credits?: Credits
   /** Extra reports for watching an ad, when the owner has turned that on. */
   ads?: AdOffer
+  referral?: { enabled: boolean; code: string; reward: number; welcome: number; joined: number; waiting: number }
   history_key?: string
 }
 

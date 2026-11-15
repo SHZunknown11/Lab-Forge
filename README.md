@@ -33,8 +33,13 @@ screenshots and learning outcomes, laid out the way your college wants it.
   sessions" in `/admin`. What LabForge couldn't do at all (a language, a
   missing library) is counted under "Gaps", and you get a Telegram or email
   alert when several reports hit the same one.
-- **Ads that pay for the server.** Out of free reports, a student can watch a
-  rewarded ad (Google Ad Manager) for another one, a few times a day.
+- **Ads and packs that pay for the server.** Out of free reports, a student
+  can watch a rewarded ad (Google Ad Manager) for another one, buy a pack with
+  UPI through Razorpay, or invite a classmate.
+- **A report of your own.** A short note ("use a while loop, my array is
+  9 4 7") gets a report written for that student instead of the shared one.
+- **MATLAB too.** With GNU Octave in the image, Image Processing sheets run and
+  their figures go into the report.
 - **Understand it, don't just submit it.** "Explain this code" walks through
   each program and offers likely viva questions with answers.
 
@@ -90,6 +95,7 @@ sheet ─► extract text ─► condense (drop tutorial text, links, boilerplat
 | `core/limits.py`, `core/db.py` | Limits per browser and per IP; Postgres for cache, limits and logs |
 | `core/accounts.py`, `core/mailer.py` | Sign-in by emailed code, sessions, report credits, ad rewards, saved failed sessions |
 | `core/gaps.py`, `core/notify.py` | Names what LabForge couldn't do; alerts the owner on Telegram or by email |
+| `core/payments.py` | Razorpay orders and signature checks for paid packs |
 | `apps/frontend/` | React app: the live page preview is the editor |
 
 ## Configuration

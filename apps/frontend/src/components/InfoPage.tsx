@@ -249,8 +249,9 @@ function Privacy({ meta }: { meta: Meta | null }) {
         To write reports you sign in with your college email address. We send it a 6-digit code; there is no password.
         For your account we keep: your email address, when you created the account and last signed in, a one-way code
         of the IP address you last signed in from, and a record of each report you wrote (the time, and whether it used
-        a free report or an extra one, and each extra report you got by watching an ad). We use this to give every
-        student a fair share of free reports and to stop
+        a free report or an extra one, each extra report you got by watching an ad, buying a pack or inviting a
+        classmate, and who invited you if you signed up with an invite link). We use this to give every student a
+        fair share of free reports and to stop
         abuse. Signing in puts one cookie in your browser that keeps you signed in for 30 days. It isn't used for
         advertising.
       </p>
@@ -281,6 +282,10 @@ function Privacy({ meta }: { meta: Meta | null }) {
         <li>
           <b>A cache of written sheets</b>, without any personal details, so the same sheet doesn't have to be written
           twice.
+        </li>
+        <li>
+          <b>The note you add to a report</b>, if you add one. It is sent to the AI service with the sheet, so don't
+          put personal details in it. The subject name you type is counted so it can be offered to other students.
         </li>
         <li>
           <b>An activity log</b>, kept for {logDays} days so we can fix reports that come out wrong: which experiment was
@@ -319,6 +324,10 @@ function Privacy({ meta }: { meta: Meta | null }) {
         </li>
         <li>
           <b>Our email provider</b> receives your email address so the sign-in code can be delivered.
+        </li>
+        <li>
+          <b>Razorpay</b> takes the payment if you buy reports. Your card, UPI or bank details go to Razorpay and
+          never reach our server; we keep the order number, the amount and whether it was paid.
         </li>
         <li>
           <b>Google AdSense</b> shows ads and uses cookies to do it, including ads based on your earlier visits to this
@@ -399,6 +408,21 @@ function Terms() {
         Free and extra reports have no cash value, can't be transferred or refunded, and unused free reports don't
         carry over. Trying to get around the limits, for example with several accounts, automated requests or
         claiming ad reports without watching the ad, isn't allowed and can get an account closed.
+      </p>
+      <h2>Buying reports</h2>
+      <p>
+        When packs are on sale you can buy extra reports. Payments are handled by Razorpay. The reports are added
+        to your account as soon as the payment is confirmed and they don't expire. Because they are delivered at
+        once, a pack can't be returned once its reports have been added. If you were charged and the reports
+        didn't arrive, write to us within 7 days with the payment id and we will add them or refund the payment.
+        Prices can change; a pack you already bought doesn't.
+      </p>
+      <h2>Notes and invites</h2>
+      <p>
+        A report with a personal note is written for you and uses more reports than an ordinary one; the number is
+        shown before you write it. If you invite classmates with your link, you get extra reports when they sign
+        up and write a first report. Invites are for real classmates: accounts made only to collect invite
+        reports can be closed, and the reports taken back.
       </p>
       <h2>Your reports are kept on your device</h2>
       <p>

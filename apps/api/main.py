@@ -69,7 +69,8 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
 from core import gaps as gap_rules  # noqa: E402
-from core import mailer, notify  # noqa: E402
+from core import mailer, notify, payments  # noqa: E402
+from core.accounts import note_extra_cost, packs, subject_key  # noqa: E402
 from core.accounts import (  # noqa: E402
     CODE_MINUTES, SESSION_DAYS, AccountError, Accounts, NoCredits, ad_rewards_per_day, allowed_domains, flag_reason,
     free_period, free_reports, gap_alert_at,
@@ -102,6 +103,7 @@ DIST = ROOT / "apps" / "frontend" / "dist"
 STREAM_PING_SECONDS = 10
 CLIENT_ID = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 SESSION_COOKIE = "lf_session"
+NOTE_MAX = 300
 
 
 @asynccontextmanager
@@ -211,17 +213,25 @@ def need_user(request: Request) -> dict | None:
 
 def _no_credits_message() -> str:
     when = "tomorrow" if free_period() == "day" else "next month"
-    if ad_rewards_per_day():
-        return (f"You've used your {free_reports()} free reports. Watch an ad for another one "
+    ways = (["watch an ad for another one"] if ad_rewards_per_day() else []) + (
+        ["buy a pack"] if _pay_info()["enabled"] else [])
+    if ways:
+        return (f"You've used your {free_reports()} free reports. You can {' or '.join(ways)} "
                 f"(at the top of this panel), or come back {when}.")
     return f"You've used your {free_reports()} free reports. More {when}."
+
+
+def _pay_info() -> dict:
+    listed = packs() if payments.configured() else []
+    return {"enabled": bool(listed), "key_id": payments.key_id() if listed else "", "packs": listed}
 
 
 def _me(user: dict | None) -> dict:
     if user is None:
         return {"user": None}
     return {"user": {"email": user["email"]}, "credits": accounts.credits(user["id"]),
-            "ads": accounts.ads(user["id"]), "history_key": accounts.history_key(user["id"])}
+            "ads": accounts.ads(user["id"]), "referral": accounts.referral(user["id"]),
+            "history_key": accounts.history_key(user["id"])}
 
 
 def _signed_in(request: Request) -> dict:
@@ -268,6 +278,7 @@ class CodeRequest(BaseModel):
 class VerifyRequest(BaseModel):
     email: str = Field(max_length=254)
     code: str = Field(max_length=12)
+    ref: str = Field(default="", max_length=20)  # the friend whose link brought them here
 
 
 @app.post("/api/auth/code")
@@ -303,6 +314,11 @@ def auth_verify(body: VerifyRequest, request: Request):
         user, token = accounts.verify_code(email, body.code, hash_ip(client_ip(request)))
     except AccountError as exc:
         raise HTTPException(exc.status, str(exc)) from exc
+    if user.get("new") and body.ref:
+        try:
+            accounts.add_referral(user["id"], body.ref)
+        except Exception as exc:  # noqa: BLE001 - a referral must never stop a sign-in
+            print(f"[referral] {type(exc).__name__}: {exc}")
     response = JSONResponse(_me(user), headers={"Cache-Control": "no-store"})
     response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_DAYS * 86400, httponly=True, samesite="lax",
                         secure=_is_https(request), path="/")
@@ -322,6 +338,112 @@ def me(request: Request):
     return JSONResponse(_me(current_user(request)), headers={"Cache-Control": "no-store"})
 
 
+class OrderRequest(BaseModel):
+    pack: str = Field(max_length=20)
+
+
+class PaymentProof(BaseModel):
+    order_id: str = Field(max_length=60)
+    payment_id: str = Field(max_length=60)
+    signature: str = Field(max_length=200)
+
+
+@app.post("/api/pay/order")
+def pay_order(body: OrderRequest, request: Request):
+    """Start buying a pack. The price comes from the pack here, never from the page."""
+    user = _signed_in(request)
+    guard(request, "pay")
+    pack = next((p for p in _pay_info()["packs"] if p["id"] == body.pack), None)
+    if pack is None:
+        raise HTTPException(404, "That pack isn't on sale.")
+    try:
+        order_id = payments.create_order(pack["price"] * 100, f"lf-{user['id'][:12]}-{int(time.time())}",
+                                         {"reports": str(pack["reports"])})
+    except payments.PaymentError as exc:
+        print(f"[pay] {exc}")
+        raise HTTPException(502, "The payment service didn't answer. Try again in a minute.") from exc
+    accounts.add_order(order_id, user["id"], pack)
+    return {"order_id": order_id, "amount": pack["price"] * 100, "currency": "INR", "key_id": payments.key_id(),
+            "reports": pack["reports"], "email": user["email"]}
+
+
+@app.post("/api/pay/verify")
+def pay_verify(body: PaymentProof, request: Request):
+    """The page says the payment went through: add the reports only if Razorpay's signature agrees."""
+    user = _signed_in(request)
+    guard(request, "pay")
+    if (accounts.order_owner(body.order_id) != user["id"]
+            or not payments.verify_payment(body.order_id, body.payment_id, body.signature)):
+        raise HTTPException(400, "We couldn't confirm that payment. If money left your account, your reports "
+                                 "will be added within a few minutes; if they aren't, contact us with the payment id.")
+    accounts.complete_order(body.order_id, body.payment_id)
+    return JSONResponse(_me(user), headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/pay/webhook")
+async def pay_webhook(request: Request):
+    """Razorpay's own notice that a payment was captured, for when the page closed before /verify."""
+    raw = await request.body()
+    if len(raw) > 200_000 or not payments.verify_webhook(raw, request.headers.get("x-razorpay-signature", "")):
+        raise HTTPException(400, "Bad signature.")
+    try:
+        event = json.loads(raw)
+        if event.get("event") in ("payment.captured", "order.paid"):
+            payment = event["payload"]["payment"]["entity"]
+            accounts.complete_order(str(payment.get("order_id", "")), str(payment.get("id", "")))
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(400, "Unreadable event.") from exc
+    return {"ok": True}
+
+
+@lru_cache(maxsize=1)
+def _seed_subjects() -> tuple:
+    try:
+        rows = json.loads((ROOT / "config" / "subjects.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        rows = []
+    return tuple((str(r.get("subject_name", "")), str(r.get("subject_code", ""))) for r in rows if r.get("subject_name"))
+
+
+@app.get("/api/subjects")
+def subject_list():
+    """Subjects everyone may pick: the built-in ones and those the owner approved."""
+    seen, out = set(), []
+    try:
+        approved = [(s["name"], s["code"]) for s in accounts.subjects("approved")]
+    except Exception as exc:  # noqa: BLE001
+        print(f"[subjects] {type(exc).__name__}: {exc}")
+        approved = []
+    for name, code in [*approved, *_seed_subjects()]:
+        key = subject_key(name)
+        if key and key not in seen:
+            seen.add(key)
+            out.append({"name": name, "code": code})
+    return JSONResponse({"subjects": out}, headers={"Cache-Control": "public, max-age=300"})
+
+
+def _summary_text(s: dict) -> str:
+    lines = [
+        f"Last {s['days']} days:",
+        f"- {s['reports']} reports by {s['active_accounts']} students ({s['new_accounts']} new accounts, "
+        f"{s['accounts']} in all)",
+        f"- {s['ad_reports']} reports from ads, {s['orders']} packs sold (Rs {s['revenue']:.0f}), "
+        f"{s['referrals']} referrals",
+        f"- {s['failed_sessions']} sessions with a problem, {s['subjects_waiting']} subjects waiting for approval",
+    ]
+    if s["gaps"]:
+        lines.append("Most common gaps: " + "; ".join(f"{g['label']} ({g['reports']})" for g in s["gaps"]))
+    return "\n".join(lines)
+
+
+def _weekly_digest() -> None:
+    try:
+        if notify.backend() and accounts.digest_due():
+            notify.send("LabForge: this week", _summary_text(accounts.summary(7)))
+    except Exception as exc:  # noqa: BLE001
+        print(f"[digest] {type(exc).__name__}: {exc}")
+
+
 _last_purge = [time.time()]
 
 
@@ -329,6 +451,7 @@ def _maybe_purge() -> None:
     if time.time() - _last_purge[0] > 3600:
         _last_purge[0] = time.time()
         threading.Thread(target=purge_old_jobs, args=(JOB_TTL_HOURS,), daemon=True).start()
+        threading.Thread(target=_weekly_digest, daemon=True).start()
 
 
 def _job(job_id: str) -> Path:
@@ -357,6 +480,8 @@ def meta(request: Request):
         "limits": {"daily": daily, "remaining": remaining(request, "ai")},
         "auth": {"required": login_required(), "domains": allowed_domains(), "free": free_reports(),
                  "period": free_period(), "flag_days": accounts.flag_days()},
+        "pay": _pay_info(),
+        "note": {"max": NOTE_MAX, "extra_cost": note_extra_cost() if login_required() else 0},
         "job_ttl_hours": JOB_TTL_HOURS,
         "log_days": activity.keep_days,
         "log_personal": os.environ.get("LABFORGE_LOG_PERSONAL", "0") == "1",
@@ -381,6 +506,8 @@ async def create_draft(
     subject: str = Form(""),
     fresh: bool = Form(False),
     from_job: str = Form(""),
+    subject_code: str = Form(""),
+    note: str = Form(""),
 ):
     _maybe_purge()
     ip = client_ip(request)
@@ -408,6 +535,11 @@ async def create_draft(
     sheet = strip_personal(sheet)
     if len(sheet) < 30:
         raise HTTPException(422, "There isn't enough text in that sheet. Paste the experiment text instead.")
+    # A personal note makes the report the student's own. It becomes part of the sheet, so the
+    # report is written for it (not taken from the shared cache) and a rewrite keeps it.
+    note = " ".join(note.split())[:NOTE_MAX] if previous is None else ""
+    if note:
+        sheet += f"\n\nStudent's note: {note}"
 
     language = (language or "auto").lower()
     language = language if language in LANGUAGE_LABELS or language == "auto" else "auto"
@@ -416,15 +548,21 @@ async def create_draft(
     hit = not fresh and cache.get(DraftCache.key(sheet, language)) is not None
     # Writing the same sheet again (from_job) is part of the report already paid for.
     pays = user is not None and login_required() and not owner and previous is None
-    if pays and accounts.credits(user["id"])["left"] <= 0:
-        raise HTTPException(402, _no_credits_message())
+    cost = 1 + (note_extra_cost() if note else 0)
+    if pays:
+        left = accounts.credits(user["id"])["left"]
+        if left <= 0:
+            raise HTTPException(402, _no_credits_message())
+        if left < cost:
+            raise HTTPException(402, f"A report with a personal note uses {cost} reports and you have {left}. "
+                                     "Remove the note, or get more reports first.")
     if not hit:
         guard(request, "ai")
 
     job_id, job_dir = new_job()
     if pays:
         try:
-            accounts.spend(user["id"], job_id)
+            accounts.spend(user["id"], job_id, cost)
         except NoCredits as exc:
             shutil.rmtree(job_dir, ignore_errors=True)
             raise HTTPException(402, _no_credits_message()) from exc
@@ -463,6 +601,14 @@ async def create_draft(
         if owner:
             return
         activity.record("draft", job_id, seconds=round(time.monotonic() - started), **log)
+        if written:
+            try:
+                if subject:
+                    accounts.note_subject(subject, subject_code)
+                if user:
+                    accounts.reward_referral(user["id"])  # their first report pays the friend who invited them
+            except Exception as exc:  # noqa: BLE001
+                print(f"[accounts] {type(exc).__name__}: {exc}")
         stopped = log["error"] == "Stopped by the student."
         reason = "" if stopped else flag_reason(log["error"], full["tasks"])
         if reason:
@@ -783,6 +929,32 @@ def admin_gap_resolve(body: GapKey, request: Request):
     return {"ok": True}
 
 
+@app.get("/api/admin/summary")
+def admin_summary(request: Request, days: int = 7):
+    _admin(request)
+    return accounts.summary(max(1, min(days, 90)))
+
+
+@app.get("/api/admin/subjects")
+def admin_subjects(request: Request):
+    _admin(request)
+    return {"subjects": accounts.subjects()}
+
+
+class SubjectEdit(BaseModel):
+    key: str = Field(max_length=120)
+    status: Literal["", "approved", "pending", "hidden"] = ""
+    name: str = Field(default="", max_length=120)
+    code: str | None = Field(default=None, max_length=30)
+
+
+@app.post("/api/admin/subjects")
+def admin_subject_edit(body: SubjectEdit, request: Request):
+    _admin(request)
+    accounts.set_subject(body.key, body.status, body.name, body.code)
+    return {"ok": True}
+
+
 @app.get("/api/admin/users")
 def admin_users(request: Request):
     _admin(request)
@@ -835,6 +1007,8 @@ def admin_status(request: Request):
         "mail": mailer.backend() or "not set up",
         "owner_alerts": notify.backend() or "not set up",
         "ad_rewards_per_day": ad_rewards_per_day(),
+        "payments": "razorpay" if payments.configured() else "not set up",
+        "packs": packs(),
         "email_domains": allowed_domains(),
         "client_ip": client_ip(request),
         "ip_headers": {h: request.headers.get(h, "") for h in (

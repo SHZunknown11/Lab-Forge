@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
-  ApiError, cancelJob, createDraft, deleteJob, fetchFile, fileUrl, getMe, getMeta, renderReport, resumeDraft, runTask,
-  uploadImage,
+  ApiError, cancelJob, createDraft, deleteJob, fetchFile, fileUrl, getMe, getMeta, getSubjects, renderReport,
+  resumeDraft, runTask, uploadImage,
 } from "./api"
 import { Account, creditsLine } from "./components/Account"
+import { AccountExtras, rememberInvite } from "./components/AccountExtras"
 import { AdSlot } from "./components/AdSlot"
 import { History } from "./components/History"
 import { HomeIntro, InfoPage } from "./components/InfoPage"
@@ -98,6 +99,8 @@ export default function App() {
 
   const [sheetFile, setSheetFile] = useState<File | null>(null)
   const [sheetText, setSheetText] = useState("")
+  const [note, setNote] = useState("")
+  const [catalog, setCatalog] = useState<RecentSubject[]>([])
   const [pasteMode, setPasteMode] = useState(false)
   const [writing, setWriting] = useState(false)
   const [progress, setProgress] = useState<Progress>(EMPTY_PROGRESS)
@@ -129,6 +132,18 @@ export default function App() {
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    rememberInvite()
+    getSubjects()
+      .then(setCatalog)
+      .catch(() => {})
+  }, [])
+  // The student's own recent subjects first, then the ones everyone can pick.
+  const subjectChoices = useMemo(
+    () => [...recent, ...catalog.filter((c) => !recent.some((r) => r.name.toLowerCase() === c.name.toLowerCase()))],
+    [recent, catalog],
+  )
 
   const refreshMe = useCallback(() => {
     getMe()
@@ -333,6 +348,8 @@ export default function App() {
     }
     form.append("language", language)
     form.append("subject", subject)
+    form.append("subject_code", value("subject code"))
+    if (!fresh && note.trim()) form.append("note", note.trim())
     form.append("fresh", fresh ? "true" : "false")
 
     abort.current?.abort()
@@ -555,6 +572,7 @@ export default function App() {
         )}
 
         {meta && (meta.auth.required || me?.user) && <Account auth={meta.auth} me={me} onChange={setMe} />}
+        {meta && me?.user && <AccountExtras me={me} pay={meta.pay} onChange={setMe} />}
 
         <section className="step" aria-labelledby="s1">
           <h2 id="s1">
@@ -605,14 +623,14 @@ export default function App() {
                 onChange={(p) => {
                   setField(f.id, p)
                   if (f.label.toLowerCase() === "subject name" && p.value !== undefined) {
-                    const match = recent.find((s) => s.name === p.value)
+                    const match = subjectChoices.find((s) => s.name === p.value)
                     const codeField = fields.find((x) => x.label.toLowerCase() === "subject code")
                     if (match && codeField) setField(codeField.id, { value: match.code })
                   }
                 }} />
             ))}
             <datalist id="recent-subjects">
-              {recent.map((s) => (
+              {subjectChoices.map((s) => (
                 <option key={s.name} value={s.name} />
               ))}
             </datalist>
@@ -660,6 +678,22 @@ export default function App() {
             </select>
           </label>
 
+          {meta && (
+            <label className="field">
+              <span>A note for this report (optional)</span>
+              <textarea rows={2} maxLength={meta.note.max} value={note}
+                placeholder="e.g. Use a while loop, and test it with the array 9 4 7 1"
+                onChange={(e) => setNote(e.target.value)} />
+            </label>
+          )}
+          {meta && note.trim() && (
+            <p className="hint">
+              With a note, the report is written just for you instead of reusing one written before
+              {meta.note.extra_cost > 0 ? `, so it uses ${1 + meta.note.extra_cost} reports instead of 1` : ""}. Every
+              requirement of the sheet is still met.
+            </p>
+          )}
+
           <button type="button" className="btn btn--primary btn--wide" onClick={() => write(false)} disabled={writing || !meta}>
             {writing ? "Writing your report…" : "Write my report"}
           </button>
@@ -674,6 +708,7 @@ export default function App() {
               this page: the report keeps being written and comes back when you return.
             </p>
           )}
+          {writing && <AdSlot placement="wait" />}
           {error && (
             <p className="alert" role="alert">
               {error}

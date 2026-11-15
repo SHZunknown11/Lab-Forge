@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { adClaim, adTicket, requestCode, signOut, verifyCode } from "../api"
 import { rewardedConfigured, showRewardedAd } from "../rewarded"
+import { inviteCode } from "./AccountExtras"
 import type { Me, Meta } from "../types"
 
 /** "3 of 3 free reports left today", plus any extra credits. */
@@ -100,7 +101,7 @@ export function Account({ auth, me, onChange }: {
       {sentTo ? (
         <form onSubmit={(e) => {
           e.preventDefault()
-          void run(async () => onChange(await verifyCode(sentTo, code)))
+          void run(async () => onChange(await verifyCode(sentTo, code, inviteCode())))
         }}>
           <p className="hint">
             We sent a 6-digit code to <b>{sentTo}</b>. It can take a minute; check your spam folder too.
