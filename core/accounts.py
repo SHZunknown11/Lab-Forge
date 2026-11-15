@@ -505,6 +505,17 @@ class Accounts:
             conn.execute("DELETE FROM lf_gaps WHERE key = %s", (key,))
             conn.execute("DELETE FROM lf_meta WHERE key = %s", (f"gap_alert:{key}",))
 
+    # ── small settings kept with the data (bot sessions, alert markers) ──
+    def meta_get(self, key: str) -> str:
+        with self._db() as conn:
+            row = conn.execute("SELECT value FROM lf_meta WHERE key = %s", (key,)).fetchone()
+        return row[0] if row else ""
+
+    def meta_set(self, key: str, value: str) -> None:
+        with self._db() as conn:
+            conn.execute("INSERT INTO lf_meta (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET "
+                         "value = excluded.value", (key, value))
+
     # ── paid packs ─────────────────────────────────────────────────
     def add_order(self, order_id: str, user_id: str, pack: dict) -> None:
         with self._db() as conn:

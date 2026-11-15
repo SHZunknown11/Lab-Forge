@@ -266,6 +266,51 @@ export function Gaps({ token, onOpen }: { token: string; onOpen: (job: string) =
   )
 }
 
+/** What the server is running, and the last lines it printed: the app's own log, no shell needed. */
+export function Server({ token }: { token: string }) {
+  const [status, setStatus] = useState<Record<string, unknown> | null>(null)
+  const [lines, setLines] = useState<string[]>([])
+  const [word, setWord] = useState("")
+  const [error, setError] = useState("")
+
+  const load = useCallback(() => {
+    setError("")
+    ask<Record<string, unknown>>(token, "/api/admin/status")
+      .then(setStatus)
+      .catch((e: Error) => setError(e.message))
+    ask<{ lines: string[] }>(token, `/api/admin/serverlog?count=80&word=${encodeURIComponent(word)}`)
+      .then((d) => setLines(d.lines))
+      .catch((e: Error) => setError(e.message))
+  }, [token, word])
+  useEffect(load, [load])
+
+  const show = (v: unknown) => (Array.isArray(v) ? v.join(", ") : typeof v === "object" && v ? Object.entries(v)
+    .map(([k, x]) => `${k}${x === false ? " (no)" : ""}`).join(", ") : String(v))
+
+  return (
+    <>
+      <div className="admin__bar">
+        <input type="search" placeholder="Filter the log, e.g. ai, mail, runner" value={word} aria-label="Filter"
+          onChange={(e) => setWord(e.target.value)} />
+        <button className="btn btn--quiet" onClick={load}>Refresh</button>
+      </div>
+      {error && <p className="alert">{error}</p>}
+      {status && (
+        <dl className="admin__meta">
+          {["providers", "runtimes", "exec_backend", "database", "mail", "owner_alerts", "telegram_bot", "payments",
+            "login_required"].filter((k) => k in status).map((k) => (
+            <div key={k} style={{ display: "contents" }}>
+              <dt>{k.replace(/_/g, " ")}</dt>
+              <dd>{show(status[k])}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      <pre className="admin__code admin__log">{lines.length ? lines.join("\n") : "Nothing logged yet."}</pre>
+    </>
+  )
+}
+
 interface SubjectRow {
   key: string
   name: string

@@ -1769,3 +1769,21 @@ textarea.code {
   flex-wrap: wrap;
   gap: 8px;
 }
+
+/* ── the admin page on a phone, inside Telegram ────────────────── */
+.admin__log {
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .admin__users {
+    display: block;
+    overflow-x: auto;
+  }
+
+  .admin__tabs {
+    flex-wrap: wrap;
+  }
+}

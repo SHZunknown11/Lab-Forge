@@ -68,6 +68,7 @@ from fastapi.responses import (  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
+from core import botlogs, telegram_bot  # noqa: E402
 from core import gaps as gap_rules  # noqa: E402
 from core import mailer, notify, payments  # noqa: E402
 from core.accounts import note_extra_cost, packs, subject_key  # noqa: E402
@@ -108,10 +109,19 @@ NOTE_MAX = 300
 
 @asynccontextmanager
 async def lifespan(_app):
+    botlogs.install()  # keep the server's own log lines for the Telegram bot
     removed = purge_old_jobs(JOB_TTL_HOURS)
     if removed:
         print(f"[jobs] removed {removed} expired job folders")
+    stop_polling = threading.Event()
+    if telegram_bot.enabled():  # the "/" menu in your chat, kept up to date with every start
+        threading.Thread(target=lambda: telegram_bot.publish_commands(), daemon=True, name="telegram-menu").start()
+    if telegram_bot.enabled() and os.environ.get("TELEGRAM_POLL", "0") == "1":
+        threading.Thread(target=telegram_bot.poll_forever, args=(bot, stop_polling), daemon=True,
+                         name="telegram-poll").start()
+        print("[bot] polling Telegram for messages")
     yield
+    stop_polling.set()
     from core.db import close_all
 
     activity.flush(timeout=3)
@@ -124,6 +134,20 @@ activity = ActivityLog()
 limiter = make_limiter()
 jobs = DraftJobs()
 accounts = Accounts()
+
+
+def _bot_status() -> dict:
+    from core.db import database_url
+
+    return {"providers": get_provider().describe(), "runtimes": runner.available(), "exec_backend": runner.backend,
+            "database": bool(database_url()), "login_required": login_required(),
+            "mail": mailer.backend() or "not set up", "owner_alerts": notify.backend() or "not set up",
+            "payments": "razorpay" if payments.configured() else "not set up"}
+
+
+bot = telegram_bot.Bot(telegram_bot.Context(
+    accounts=accounts, activity=activity, status=_bot_status,
+    summary_text=lambda days: _summary_text(accounts.summary(days)), serverlog=botlogs.tail))
 
 
 # ── who is asking, and how much they may ask ───────────────────────
@@ -378,6 +402,41 @@ def pay_verify(body: PaymentProof, request: Request):
                                  "will be added within a few minutes; if they aren't, contact us with the payment id.")
     accounts.complete_order(body.order_id, body.payment_id)
     return JSONResponse(_me(user), headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """Telegram delivers messages to the admin bot here. Anything without Telegram's secret gets a 404."""
+    if not telegram_bot.valid_webhook_secret(request.headers.get("x-telegram-bot-api-secret-token", "")):
+        raise HTTPException(404)
+    try:
+        update = await request.json()
+    except ValueError:
+        return {"ok": True}
+    threading.Thread(target=bot.handle_update, args=(update,), daemon=True, name="telegram-update").start()
+    return {"ok": True}
+
+
+class PanelLogin(BaseModel):
+    init_data: str = Field(max_length=4000)
+
+
+@app.post("/api/telegram/auth")
+def telegram_auth(body: PanelLogin, request: Request):
+    """The admin page opened inside Telegram: trade Telegram's signed launch data for an admin key."""
+    guard(request, "verify")
+    user_id = telegram_bot.verify_init_data(body.init_data)
+    if user_id is None or user_id not in telegram_bot.allowed_chats():
+        raise HTTPException(401, "Telegram didn't vouch for you. Open the panel from the bot's /panel button.")
+    if not bot.panel_signed_in(user_id):
+        raise HTTPException(401, "Send /login <passcode> to the bot first, then open the panel again.")
+    return {"token": telegram_bot.panel_token(), "hours": telegram_bot.PANEL_HOURS}
+
+
+@app.get("/api/admin/serverlog")
+def admin_serverlog(request: Request, count: int = 60, word: str = ""):
+    _admin(request)
+    return {"lines": botlogs.tail(count, word[:60])}
 
 
 @app.post("/api/pay/webhook")
@@ -858,9 +917,12 @@ def health():
 # ── admin (header token only: tokens in URLs end up in logs) ───────
 
 def _is_owner(request: Request) -> bool:
-    """Requests carrying the admin key (the deploy smoke test, the owner's own checks) aren't logged."""
+    """Requests carrying the admin key (the deploy smoke test, the owner's own checks) aren't logged.
+    The key the Telegram panel is given for a few hours counts too."""
     expected = os.environ.get("LABFORGE_ADMIN_TOKEN", "")
     given = request.headers.get("x-admin-token", "")
+    if given.startswith("tgs.") and telegram_bot.valid_panel_token(given):
+        return True
     return bool(expected and given) and hmac.compare_digest(given.encode(), expected.encode())
 
 
@@ -1006,6 +1068,9 @@ def admin_status(request: Request):
         "login_required": login_required(),
         "mail": mailer.backend() or "not set up",
         "owner_alerts": notify.backend() or "not set up",
+        "telegram_bot": ("on, passcode" if telegram_bot.passcode() else "on, no passcode") if telegram_bot.enabled()
+        else "not set up",
+        "telegram_panel": telegram_bot.panel_url() or "needs LABFORGE_PUBLIC_URL (https)",
         "ad_rewards_per_day": ad_rewards_per_day(),
         "payments": "razorpay" if payments.configured() else "not set up",
         "packs": packs(),

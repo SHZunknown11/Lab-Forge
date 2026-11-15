@@ -2,6 +2,8 @@
 
 Backends, picked by LABFORGE_MAIL_BACKEND or by which settings are present:
 - resend:  RESEND_API_KEY (HTTPS, works on hosts that block SMTP ports; needs a verified domain)
+- brevo:   BREVO_API_KEY (HTTPS, works on hosts that block SMTP ports; needs no domain, only one
+           sender address you have confirmed in Brevo, e.g. your own Gmail)
 - smtp:    SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD (e.g. Gmail with an app password)
 - console: prints the code to the server log. For development only.
 LABFORGE_MAIL_FROM is the sender, e.g. "LabForge <login@labforge.in>".
@@ -12,6 +14,7 @@ import os
 import smtplib
 import ssl
 from email.message import EmailMessage
+from email.utils import parseaddr
 
 
 class MailError(Exception):
@@ -20,10 +23,12 @@ class MailError(Exception):
 
 def backend() -> str:
     explicit = os.environ.get("LABFORGE_MAIL_BACKEND", "").strip().lower()
-    if explicit in ("resend", "smtp", "console"):
+    if explicit in ("resend", "brevo", "smtp", "console"):
         return explicit
     if os.environ.get("RESEND_API_KEY", "").strip():
         return "resend"
+    if os.environ.get("BREVO_API_KEY", "").strip():
+        return "brevo"
     if os.environ.get("SMTP_HOST", "").strip():
         return "smtp"
     return ""
@@ -54,6 +59,8 @@ def send(email: str, subject: str, text: str) -> None:
     try:
         if kind == "resend":
             _resend(email, subject, text)
+        elif kind == "brevo":
+            _brevo(email, subject, text)
         elif kind == "smtp":
             _smtp(email, subject, text)
         elif kind == "console":
@@ -75,6 +82,20 @@ def _resend(email: str, subject: str, text: str) -> None:
                      json={"from": _sender(), "to": [email], "subject": subject, "text": text})
     if res.status_code >= 300:
         raise MailError(f"Resend answered {res.status_code}: {res.text[:200]}")
+
+
+def _brevo(email: str, subject: str, text: str) -> None:
+    import httpx
+
+    name, address = parseaddr(_sender())
+    if not address:
+        raise MailError("Set LABFORGE_MAIL_FROM to the sender address you confirmed in Brevo.")
+    res = httpx.post("https://api.brevo.com/v3/smtp/email", timeout=15,
+                     headers={"api-key": os.environ["BREVO_API_KEY"].strip(), "accept": "application/json"},
+                     json={"sender": {"name": name or "LabForge", "email": address}, "to": [{"email": email}],
+                           "subject": subject, "textContent": text})
+    if res.status_code >= 300:
+        raise MailError(f"Brevo answered {res.status_code}: {res.text[:200]}")
 
 
 def _smtp(email: str, subject: str, text: str) -> None:

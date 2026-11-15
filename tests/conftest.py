@@ -39,8 +39,13 @@ def isolated_storage(tmp_path, monkeypatch):
     monkeypatch.setenv("LABFORGE_REFERRAL_REWARD", "2")
     monkeypatch.setenv("LABFORGE_REFERRAL_WELCOME", "1")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")  # no alert ever leaves a test run
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "")
+    monkeypatch.setenv("TELEGRAM_ADMIN_CHAT_IDS", "")
+    monkeypatch.setenv("TELEGRAM_POLL", "0")
+    monkeypatch.setenv("LABFORGE_BOT_PASSCODE", "")
     monkeypatch.setenv("LABFORGE_OWNER_EMAIL", "")
     monkeypatch.setenv("RESEND_API_KEY", "")
+    monkeypatch.setenv("BREVO_API_KEY", "")
     monkeypatch.setenv("SMTP_HOST", "")
     monkeypatch.setenv("LABFORGE_USAGE_LOG", str(tmp_path / "usage.jsonl"))
     monkeypatch.setenv("AI_MODE", "local")

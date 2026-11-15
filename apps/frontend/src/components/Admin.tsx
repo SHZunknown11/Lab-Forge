@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Flags, Gaps, Subjects, Users } from "./AdminAccounts"
+import { Flags, Gaps, Server, Subjects, Users } from "./AdminAccounts"
 
 /** Private activity panel at /admin: who made which report and whether its programs ran. */
 
@@ -66,7 +66,7 @@ export default function Admin() {
   const [issuesOnly, setIssuesOnly] = useState(false)
   const [vote, setVote] = useState<"" | "up" | "down" | "any">("")
   const [open, setOpen] = useState<string | null>(null)
-  const [tab, setTab] = useState<"activity" | "flags" | "gaps" | "subjects" | "users">("activity")
+  const [tab, setTab] = useState<"activity" | "flags" | "gaps" | "subjects" | "users" | "server">("activity")
   const [flagQuery, setFlagQuery] = useState("")
 
   const load = useCallback(async () => {
@@ -99,6 +99,26 @@ export default function Admin() {
   useEffect(() => {
     void load()
   }, [load])
+
+  // Opened from the Telegram bot's /panel button: Telegram puts signed launch data in the link's
+  // fragment. The server checks it and hands back a key that works for a few hours, so there is
+  // nothing to type. (Outside Telegram there is no such data and the key form shows as before.)
+  useEffect(() => {
+    if (token) return
+    const data = new URLSearchParams(location.hash.slice(1)).get("tgWebAppData")
+    if (!data) return
+    fetch("/api/telegram/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ init_data: data }),
+    })
+      .then(async (r) => {
+        const body = await r.json().catch(() => ({}))
+        if (r.ok) setToken(body.token)
+        else setError(body.detail ?? `Error ${r.status}`)
+      })
+      .catch(() => setError("Can't reach the server."))
+  }, [token])
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -157,7 +177,7 @@ export default function Admin() {
       <header className="admin__head">
         <h1>Activity</h1>
         <div className="admin__tabs" role="tablist" aria-label="View">
-          {([["activity", "All reports"], ["flags", "Failed sessions"], ["gaps", "Gaps"], ["subjects", "Subjects"], ["users", "Accounts"]] as const).map(([id, label]) => (
+          {([["activity", "All reports"], ["flags", "Failed sessions"], ["gaps", "Gaps"], ["subjects", "Subjects"], ["users", "Accounts"], ["server", "Server"]] as const).map(([id, label]) => (
             <button key={id} role="tab" className="btn btn--quiet" aria-selected={tab === id} onClick={() => setTab(id)}>
               {label}
             </button>
@@ -180,6 +200,7 @@ export default function Admin() {
       )}
       {tab === "subjects" && <Subjects token={token} />}
       {tab === "users" && <Users token={token} />}
+      {tab === "server" && <Server token={token} />}
       {tab === "activity" && (
       <>
       <div className="admin__bar">
