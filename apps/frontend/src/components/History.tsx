@@ -1,16 +1,6 @@
 import { useEffect, useState } from "react"
+import { saveBlob as download } from "../native"
 import { historySupported, listReports, removeReport, reportFile, type HistoryItem } from "../history"
-
-function download(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement("a")
-  a.href = url
-  a.download = name
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 10_000)
-}
 
 /** Reports this account made on this device. They're stored here, locked, and nowhere else. */
 export function History({ owner, historyKey, version }: { owner: string; historyKey: string; version: number }) {

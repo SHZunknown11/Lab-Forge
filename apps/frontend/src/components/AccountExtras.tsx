@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { buyPack } from "../pay"
+import { isNative, SITE_URL } from "../native"
 import type { Me, Meta } from "../types"
 
 const REF_KEY = "lf.ref"
@@ -43,7 +44,7 @@ export function AccountExtras({ me, pay, onChange }: { me: Me; pay: Meta["pay"];
     }
   }
 
-  const link = invite ? `${location.origin}/?ref=${invite.code}` : ""
+  const link = invite ? `${(SITE_URL || location.origin)}/?ref=${invite.code}` : ""
   const pitch = invite
     ? `I make my lab reports with LabForge: it writes the code, runs it and gives you the Word and PDF file. ` +
       `Sign up with my link and you get ${invite.welcome === 1 ? "an extra report" : `${invite.welcome} extra reports`}: ${link}`
@@ -51,7 +52,7 @@ export function AccountExtras({ me, pay, onChange }: { me: Me; pay: Meta["pay"];
 
   return (
     <section className="account account--more" aria-label="Get more reports">
-      {pay.enabled && (
+      {pay.enabled && !isNative() && (
         <div className="account__block">
           <h2>Buy reports</h2>
           <div className="packs">

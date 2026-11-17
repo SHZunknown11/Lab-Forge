@@ -1,3 +1,4 @@
+import { isNative } from "./native"
 import type { AdOffer, Draft, DraftEvent, Explanation, Me, Meta, RenderResult, Task } from "./types"
 
 export class ApiError extends Error {
@@ -36,10 +37,39 @@ const CLIENT = clientId()
 function withClient(init: RequestInit = {}): RequestInit {
   const headers = new Headers(init.headers)
   headers.set("X-Client-Id", CLIENT)
+  if (isNative()) headers.set("X-LabForge-App", "1")
   return { ...init, headers }
 }
 
-const call = (url: string, init?: RequestInit) => fetch(url, withClient(init))
+/** Backend origin for the app build (empty = same origin, as on the website). */
+export const API_BASE: string = (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "")
+
+const TOKEN_KEY = "lf.token"
+export function getToken(): string {
+  try {
+    return localStorage.getItem(TOKEN_KEY) ?? ""
+  } catch {
+    return ""
+  }
+}
+export function setToken(token: string): void {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token)
+    else localStorage.removeItem(TOKEN_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+
+function withAuth(init: RequestInit = {}): RequestInit {
+  const token = getToken()
+  if (!token) return init
+  const headers = new Headers(init.headers)
+  headers.set("Authorization", `Bearer ${token}`)
+  return { ...init, headers }
+}
+
+const call = (url: string, init?: RequestInit) => fetch(API_BASE + url, withAuth(withClient(init)))
 
 async function fail(res: Response): Promise<never> {
   let message = `The server answered ${res.status}.`
@@ -201,8 +231,10 @@ export const reportContent = (job: string, body: { reason: ReportReason; comment
     }),
   )
 
-export const fileUrl = (job: string, name: string, render?: string) =>
+const filePath = (job: string, name: string, render?: string) =>
   render ? `/api/jobs/${job}/files/${render}/${encodeURIComponent(name)}` : `/api/jobs/${job}/files/${encodeURIComponent(name)}`
+
+export const fileUrl = (job: string, name: string, render?: string) => API_BASE + filePath(job, name, render)
 
 // ── account ────────────────────────────────────────────────────────
 
@@ -217,14 +249,23 @@ export const getMe = () => json<Me>(call("/api/me"))
 
 export const requestCode = (email: string) => json<{ ok: boolean; minutes: number }>(post("/api/auth/code", { email }))
 
-export const verifyCode = (email: string, code: string, ref = "") =>
-  json<Me>(post("/api/auth/verify", { email, code, ref }))
+export const verifyCode = async (email: string, code: string, ref = "") => {
+  const me = await json<Me & { token?: string }>(post("/api/auth/verify", { email, code, ref }))
+  if (me.token) setToken(me.token)
+  return me
+}
 
-export const signOut = () => json<{ ok: boolean }>(post("/api/auth/logout"))
+export const signOut = async () => {
+  try {
+    return await json<{ ok: boolean }>(post("/api/auth/logout"))
+  } finally {
+    setToken("")
+  }
+}
 
 /** A finished file as bytes, to keep on this device. */
 export async function fetchFile(job: string, name: string, render: string): Promise<Blob> {
-  const res = await call(fileUrl(job, name, render))
+  const res = await call(filePath(job, name, render))
   if (!res.ok) await fail(res)
   return res.blob()
 }

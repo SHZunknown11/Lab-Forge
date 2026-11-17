@@ -15,7 +15,34 @@ const READY_TIMEOUT_MS = 20_000
 
 export type AdResult = "granted" | "closed" | "unavailable"
 
-export const rewardedConfigured = () => !!UNIT || TEST
+import { isNative } from "./native"
+
+// Google's public test unit, used until the real AdMob unit is set in VITE_ADMOB_REWARDED_ID.
+const ADMOB_UNIT = (import.meta.env.VITE_ADMOB_REWARDED_ID as string | undefined)?.trim() || "ca-app-pub-3940256099942544/5224354917"
+const ADMOB_TESTING = !(import.meta.env.VITE_ADMOB_REWARDED_ID as string | undefined)?.trim()
+
+export const rewardedConfigured = () => isNative() || !!UNIT || TEST
+
+/** AdMob rewarded ad inside the Android app. */
+async function showNativeAd(): Promise<AdResult> {
+  try {
+    const { AdMob, RewardAdPluginEvents } = await import("@capacitor-community/admob")
+    await AdMob.initialize()
+    let granted = false
+    const reward = await AdMob.addListener(RewardAdPluginEvents.Rewarded, () => {
+      granted = true
+    })
+    try {
+      await AdMob.prepareRewardVideoAd({ adId: ADMOB_UNIT, isTesting: ADMOB_TESTING })
+      await AdMob.showRewardVideoAd()
+    } finally {
+      await reward.remove()
+    }
+    return granted ? "granted" : "closed"
+  } catch {
+    return "unavailable"
+  }
+}
 
 interface RewardedEvent {
   slot: unknown
@@ -60,6 +87,7 @@ function loadGpt(): GoogleTag {
 
 /** Show one rewarded ad. Resolves when it has been watched, closed early, or none could be shown. */
 export function showRewardedAd(testSeconds = 15): Promise<AdResult> {
+  if (isNative()) return showNativeAd()
   if (!UNIT) return TEST ? standIn(testSeconds) : Promise.resolve("unavailable")
   return new Promise((resolve) => {
     const tag = loadGpt()

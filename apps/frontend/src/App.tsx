@@ -5,6 +5,7 @@ import {
 } from "./api"
 import { Account, creditsLine } from "./components/Account"
 import { AccountExtras, rememberInvite } from "./components/AccountExtras"
+import { isNative, saveBlob } from "./native"
 import { AdSlot } from "./components/AdSlot"
 import { History } from "./components/History"
 import { HomeIntro, InfoPage } from "./components/InfoPage"
@@ -83,6 +84,13 @@ function markStale(next: Draft, prev: Draft): Draft {
     return { ...t, stale: true }
   })
   return changed ? { ...next, tasks } : next
+}
+
+/** In the app a WebView can't download a link: fetch the file and open the share sheet instead. */
+function nativeSave(e: React.MouseEvent, job: string, name: string, render: string) {
+  if (!isNative()) return
+  e.preventDefault()
+  fetchFile(job, name, render).then((blob) => saveBlob(blob, name)).catch(() => undefined)
 }
 
 export default function App() {
@@ -806,11 +814,11 @@ export default function App() {
               <div className={`downloads${stale ? " downloads--stale" : ""}`}>
                 {stale && <p className="hint">You've changed something since these were made. Update them first.</p>}
                 <div className="row">
-                  <a className="btn btn--secondary" href={fileUrl(job.id, render.docx, render.render)} download>
+                  <a className="btn btn--secondary" href={fileUrl(job.id, render.docx, render.render)} download onClick={(e) => nativeSave(e, job.id, render.docx, render.render)}>
                     Download Word file
                   </a>
                   {render.pdf && (
-                    <a className="btn btn--secondary" href={fileUrl(job.id, render.pdf, render.render)} download>
+                    <a className="btn btn--secondary" href={fileUrl(job.id, render.pdf, render.render)} download onClick={(e) => nativeSave(e, job.id, render.pdf!, render.render)}>
                       Download PDF
                     </a>
                   )}

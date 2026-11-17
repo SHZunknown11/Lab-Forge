@@ -7,6 +7,21 @@ import "@fontsource/tinos/700.css"
 import "@fontsource/cousine/400.css"
 import "./styles.css"
 import App from "./App"
+import { isNative } from "./native"
+
+// Android app: dark status-bar icons on the light header, and the back button goes back or exits.
+if (isNative()) {
+  void import("@capacitor/status-bar").then(({ StatusBar, Style }) => {
+    void StatusBar.setStyle({ style: Style.Light })
+    void StatusBar.setBackgroundColor({ color: "#eef2ff" })
+  })
+  void import("@capacitor/app").then(({ App: Native }) => {
+    void Native.addListener("backButton", ({ canGoBack }) => {
+      if (canGoBack) history.back()
+      else void Native.exitApp()
+    })
+  })
+}
 
 const Admin = lazy(() => import("./components/Admin"))
 const admin = location.pathname.replace(/\/+$/, "") === "/admin"
