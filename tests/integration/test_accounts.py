@@ -212,3 +212,38 @@ def test_blocked_accounts_are_signed_out(app):
                        json={"email": "24bcs10001@cuchd.in", "blocked": True}).status_code == 200
     assert client.get("/api/me").json() == {"user": None}
     assert write(client)[0].status_code == 401
+
+
+# ── the Android app: bearer token and CORS ─────────────────────────
+
+def test_app_signs_in_with_a_bearer_token(app):
+    email = "24bcs10002@cuchd.in"
+    web = TestClient(app.app)
+    web.post("/api/auth/code", json={"email": email})
+    res = web.post("/api/auth/verify", json={"email": email, "code": app.sent[email]})
+    assert "token" not in res.json()  # the website keeps the session in an httponly cookie only
+
+    native = TestClient(app.app)
+    email2 = "24bcs10003@cuchd.in"
+    native.post("/api/auth/code", json={"email": email2})
+    res = native.post("/api/auth/verify", json={"email": email2, "code": app.sent[email2]},
+                      headers={"X-LabForge-App": "1"})
+    token = res.json()["token"]
+    assert token
+
+    bare = TestClient(app.app)  # no cookie jar: the token alone identifies the student
+    assert bare.get("/api/me").json()["user"] is None
+    me = bare.get("/api/me", headers={"Authorization": f"Bearer {token}"}).json()
+    assert me["user"]["email"] == email2
+    bare.post("/api/auth/logout", headers={"Authorization": f"Bearer {token}"})
+    assert bare.get("/api/me", headers={"Authorization": f"Bearer {token}"}).json()["user"] is None
+
+
+def test_cors_allows_only_the_app_origin(app):
+    client = TestClient(app.app)
+    ok = client.options("/api/me", headers={"Origin": "https://localhost", "Access-Control-Request-Method": "GET",
+                                           "Access-Control-Request-Headers": "authorization"})
+    assert ok.headers.get("access-control-allow-origin") == "https://localhost"
+    assert "access-control-allow-credentials" not in ok.headers
+    bad = client.options("/api/me", headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "GET"})
+    assert "access-control-allow-origin" not in bad.headers

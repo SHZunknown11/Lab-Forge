@@ -129,6 +129,19 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="LabForge", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+
+# The Android app (Capacitor WebView) calls this API from its own origin. Only those origins are
+# allowed, and credentials stay off: the app authenticates with a bearer token, never the cookie.
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://localhost", "capacitor://localhost", "http://localhost"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Client-Id", "X-LabForge-App"],
+    allow_credentials=False,
+    max_age=600,
+)
 runner = CodeRunner()
 activity = ActivityLog()
 limiter = make_limiter()
@@ -213,8 +226,19 @@ def login_required() -> bool:
     return os.environ.get("LABFORGE_REQUIRE_LOGIN", "1").strip() != "0"
 
 
-def current_user(request: Request) -> dict | None:
+def session_token(request: Request) -> str:
+    """The session token: the browser cookie, or `Authorization: Bearer` from the Android app."""
     token = request.cookies.get(SESSION_COOKIE, "")
+    if token:
+        return token
+    auth = request.headers.get("authorization", "")
+    if auth[:7].lower() == "bearer ":
+        return auth[7:].strip()
+    return ""
+
+
+def current_user(request: Request) -> dict | None:
+    token = session_token(request)
     if not token:
         return None
     try:
@@ -343,7 +367,10 @@ def auth_verify(body: VerifyRequest, request: Request):
             accounts.add_referral(user["id"], body.ref)
         except Exception as exc:  # noqa: BLE001 - a referral must never stop a sign-in
             print(f"[referral] {type(exc).__name__}: {exc}")
-    response = JSONResponse(_me(user), headers={"Cache-Control": "no-store"})
+    payload = _me(user)
+    if request.headers.get("x-labforge-app") == "1":
+        payload["token"] = token  # the app has no cookie jar it can rely on; the site keeps it httponly
+    response = JSONResponse(payload, headers={"Cache-Control": "no-store"})
     response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_DAYS * 86400, httponly=True, samesite="lax",
                         secure=_is_https(request), path="/")
     return response
@@ -351,7 +378,7 @@ def auth_verify(body: VerifyRequest, request: Request):
 
 @app.post("/api/auth/logout")
 def auth_logout(request: Request):
-    accounts.logout(request.cookies.get(SESSION_COOKIE, ""))
+    accounts.logout(session_token(request))
     response = JSONResponse({"ok": True})
     response.delete_cookie(SESSION_COOKIE, path="/")
     return response
